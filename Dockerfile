@@ -1,4 +1,4 @@
-ARG IMAGE=python:3.8-alpine
+ARG IMAGE=balenalib/raspberrypi3-alpine-python
 FROM ${IMAGE}
 
 # Environment vars we can configure against
