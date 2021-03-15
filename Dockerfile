@@ -19,16 +19,16 @@ WORKDIR /usr/src/app
 COPY . .
 
 # Install timezone data
-RUN apk add tzdata
+RUN install_packages tzdata
 
 # Additional dependencies - line 2
-RUN apk add --no-cache gcc g++ libffi-dev musl-dev  \
+RUN install_packages --no-cache gcc g++ libffi-dev musl-dev  \
     libffi-dev libressl-dev python3-dev py-pip\
     && pip install --no-cache-dir .
 
 # Install additional packages
-RUN apk add --no-cache curl
+RUN install_packages --no-cache curl
 
 # Start script
 RUN chmod +x /usr/src/app/dockerStart.sh
-CMD ["./dockerStart.sh"]
+CMD ["bash", "./dockerStart.sh"]
