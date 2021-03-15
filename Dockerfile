@@ -1,5 +1,4 @@
-ARG IMAGE=balenalib/raspberrypi3-alpine-python
-FROM ${IMAGE}
+FROM balenalib/raspberrypi3-alpine-python
 
 # Environment vars we can configure against
 # But these are optional, so we won't define them now
@@ -32,4 +31,4 @@ RUN apk add --no-cache curl
 
 # Start script
 RUN chmod +x /usr/src/app/dockerStart.sh
-ENTRYPOINT ["./dockerStart.sh"]
+CMD ["./dockerStart.sh"]
