@@ -20,18 +20,16 @@ VOLUME /certs
 WORKDIR /usr/src/app
 COPY . .
 
-# # Install timezone data
-# RUN install_packages tzdata
-#
-# # Additional dependencies - line 2
-# RUN install_packages --no-cache gcc g++ libffi-dev musl-dev  \
-#     libffi-dev libressl-dev python3-dev py-pip\
-#     && pip install --no-cache-dir .
-#
-# # Install additional packages
-# RUN install_packages --no-cache curl
-#
-# # Start script
-# RUN chmod +x /usr/src/app/dockerStart.sh
-# CMD ["bash", "./dockerStart.sh"]
-# CMD ["cat", "/etc/os-release"]
+# Install timezone data
+RUN apk add tzdata
+
+# Install dependencies
+RUN apk add --no-cache build-base gcc libffi-dev openssl-dev musl-dev cargo \
+    && pip install --no-cache-dir .
+
+# Install additional packages
+RUN apk add --no-cache curl
+
+# Start script
+RUN chmod +x /usr/src/app/dockerStart.sh
+ENTRYPOINT ["./dockerStart.sh"]
