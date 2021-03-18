@@ -1,4 +1,4 @@
-FROM balenalib/raspberrypi3-alpine-python
+FROM python:latest
 
 # Environment vars we can configure against
 # But these are optional, so we won't define them now
@@ -20,7 +20,7 @@ VOLUME /certs
 WORKDIR /usr/src/app
 COPY . .
 
-# Install timezone data
+# # Install timezone data
 # RUN install_packages tzdata
 #
 # # Additional dependencies - line 2
@@ -34,4 +34,4 @@ COPY . .
 # # Start script
 # RUN chmod +x /usr/src/app/dockerStart.sh
 # CMD ["bash", "./dockerStart.sh"]
-CMD ["cat", "/etc/os-release"]
+# CMD ["cat", "/etc/os-release"]
