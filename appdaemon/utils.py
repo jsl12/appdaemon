@@ -296,8 +296,9 @@ def day_of_week(day):
     raise ValueError("Incorrect type for 'day' in day_of_week()'")
 
 
+# don't use any type hints here, so that @wraps will work properly
 def executor_decorator(func):
-    """Use this decorator on class methods to have them run in the executor"""
+    """Use this decorator on synchronous class methods to have them run in the AD executor asynchronously"""
 
     @wraps(func)
     async def wrapper(self, *args, **kwargs):
