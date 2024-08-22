@@ -687,12 +687,9 @@ class AppManagement:
             add_threads (bool, optional): _description_. Defaults to True.
 
         Returns:
-            AppActions object with information about which apps to initialize and/or terminate
+            AppActions object with information about which apps to initialize and/or terminate. Returns None if self.read_config() returns None
         """
-        terminate_apps = {}
-        initialize_apps = {}
-        total_apps = len(self.app_config)
-
+        actions = AppActions()
         try:
             self.last_config_file_check = await utils.run_in_executor(
                 self, self.check_app_config_files, self.last_config_file_check
@@ -717,7 +714,6 @@ class AppManagement:
                         self.logger.info("%s added or modified", file)
 
                 # Check for changes
-
                 for name in self.app_config:
                     if name in self.non_apps:
                         continue
@@ -731,8 +727,8 @@ class AppManagement:
 
                             if silent is False:
                                 self.logger.info("App '%s' changed", name)
-                            terminate_apps[name] = 1
-                            initialize_apps[name] = 1
+                            actions.mark_app_for_termination(name)
+                            actions.mark_app_for_initialization(name)
 
                         if config_path:
                             config_path = await utils.run_in_executor(self, os.path.abspath, config_path)
@@ -767,7 +763,7 @@ class AppManagement:
                             )
 
                             self.logger.info("App '%s' added", name)
-                            initialize_apps[name] = 1
+                            actions.mark_app_for_initialization(name)
                             await self.add_entity(
                                 name,
                                 "loaded",
@@ -789,35 +785,35 @@ class AppManagement:
                                     )
 
                 self.app_config = new_config
-                total_apps = len(self.app_config)
+                actions.total_apps = len(self.app_config)
 
                 for name in self.non_apps:
                     if name in self.app_config:
-                        total_apps -= 1  # remove one
+                        actions.total_apps -= 1  # remove one
 
-                active_apps, inactive, glbl = self.get_active_app_count()
+                actions.active, inactive, glbl = self.get_active_app_count()
 
                 # if silent is False:
                 await self.set_state(
                     self.total_apps_sensor,
-                    state=active_apps + inactive,
+                    state=actions.active + inactive,
                     attributes={"friendly_name": "Total Apps"},
                 )
 
-                self.logger.info("Found %s active apps", active_apps)
+                self.logger.info("Found %s active apps", actions.active)
                 self.logger.info("Found %s inactive apps", inactive)
                 self.logger.info("Found %s global libraries", glbl)
 
             # Now we know if we have any new apps we can create new threads if pinning
 
-            active_apps, inactive, glbl = self.get_active_app_count()
+            actions.active, inactive, glbl = self.get_active_app_count()
 
             if add_threads is True and self.AD.threading.auto_pin is True:
-                if active_apps > self.AD.threading.thread_count:
-                    for i in range(active_apps - self.AD.threading.thread_count):
+                if actions.active > self.AD.threading.thread_count:
+                    for i in range(actions.active - self.AD.threading.thread_count):
                         await self.AD.threading.add_thread(False, True)
 
-            return AppActions(init=initialize_apps, term=terminate_apps, total=total_apps, active=active_apps)
+            return actions
         except Exception:
             self.logger.warning("-" * 60)
             self.logger.warning("Unexpected error:")
