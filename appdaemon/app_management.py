@@ -1124,24 +1124,34 @@ class AppManagement:
                 if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in deleted
             )
 
-        # update the dependency graphs
+        # Get the paths to all the new/modified Python files
         files = self.mtimes_python.new | self.mtimes_python.modified
         if bool(files):
+            # Get the dependency graph for those files
             dep_graph = get_dependency_graph(files)
-            modules = set(dep_graph.keys())
+
+            # Start the set of full module names to load with the keys of the dependency graph
+            to_load = set(dep_graph.keys())
+
+            # Update the master dependency graph
             self.module_dependencies.update(dep_graph)
 
-            # reverse the graph and find all the modules that import any of the new/modified modules
+            # Reverse the graph so that it maps each module to the other modules that import it
             reversed_graph = reverse_graph(self.module_dependencies)
-            dependents = find_all_dependents(modules, reversed_graph)
 
-            # get the subset of the dependencies that apply to the modules to load
-            to_load = modules | dependents
+            # Add modules that import any of the new/modified modules to the set of modules to load
+            to_load |= find_all_dependents(to_load, reversed_graph)
+
+            # Get the dependencies of the full set modules to load
             sub_deps = {m: self.module_dependencies[m] for m in to_load}
 
-            # only actually use the ones that come from new and/or modified files
-            load_order = [m for m in topo_sort(sub_deps) if m in to_load]
-            self.logger.debug("Initial module load order: %s", load_order)
+            # Only actually use the ones that come from new/modified files and their dependents
+            load_order = [
+                m
+                for m in topo_sort(sub_deps)
+                if m in to_load  # This filters out modules that aren't in the set to load
+            ]
+            self.logger.debug("Module load order: %s", load_order)
             return load_order
         else:
             return []
