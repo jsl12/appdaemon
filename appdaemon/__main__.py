@@ -241,11 +241,6 @@ class ADMain:
 
         pidfile = args.pidfile
 
-        module_debug = {}
-        if args.moduledebug is not None:
-            for arg in args.moduledebug:
-                module_debug[arg[0]] = arg[1]
-
         if args.toml is True:
             default_config_filename = "appdaemon.toml"
         else:
@@ -280,11 +275,13 @@ class ADMain:
             ad_kwargs["stop_function"] = self.stop
             ad_kwargs["loglevel"] = args.debug
 
-            if module_debug:
-                if isinstance(module_debug, dict):
-                    ad_kwargs["module_debug"].update(module_debug)
-                else:
-                    ad_kwargs["module_debug"] = module_debug
+            if args.moduledebug is not None:
+                module_debug_cli = {arg[0]: arg[1] for arg in args.moduledebug}
+            else:
+                module_debug_cli = {}
+
+            if isinstance(module_debug_cfg := ad_kwargs.get("module_debug"), dict):
+                ad_kwargs["module_debug"] = module_debug_cfg | module_debug_cli
 
             # Validate the AppDaemon configuration
             ad_config_model = AppDaemonConfig.model_validate(ad_kwargs)

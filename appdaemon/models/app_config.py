@@ -121,8 +121,9 @@ class AllAppConfig(RootModel):
         return set(app_name for app_name, cfg in self.root.items() if isinstance(cfg, AppConfig))
 
     @property
-    def app_count(self) -> int:
-        return len([cfg for cfg in self.root.values() if isinstance(cfg, AppConfig)])
+    def active_app_count(self) -> int:
+        """Active in this case means not disabled"""
+        return len([cfg for cfg in self.root.values() if isinstance(cfg, AppConfig) and not cfg.disable])
 
     def get_active_app_count(self) -> Tuple[int, int, int]:
         active = 0

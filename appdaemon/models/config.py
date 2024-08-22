@@ -44,6 +44,8 @@ class AppDaemonConfig(BaseModel, extra="forbid"):
     max_clock_skew: int = 1
 
     loglevel: str = "INFO"
+    module_debug: Dict[str, str] = {}
+
     api_port: Optional[int] = None
     stop_function: Callable
 

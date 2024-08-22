@@ -503,6 +503,9 @@ class AppManagement:
             module_path = await utils.run_in_executor(self, os.path.abspath, mod_obj.__file__)
             await self.set_state(app_name, module_path=module_path)
 
+    def get_managed_app_names(self) -> Set[str]:
+        return set(name for name, o in self.objects.items() if o.type == "app")
+
     def init_plugin_object(self, name: str, object, use_dictionary_unpacking: bool = False) -> None:
         self.objects[name] = ManagedObject(
             **{
@@ -574,8 +577,9 @@ class AppManagement:
 
         models = [m.model_dump(by_alias=True, exclude_unset=True) for m in config_model_factory() if m is not None]
         combined_configs = reduce(update, models, {})
-        self.app_config = AllAppConfig.model_validate(combined_configs)
-        return self.app_config
+        return AllAppConfig.model_validate(combined_configs)
+        # self.app_config = AllAppConfig.model_validate(combined_configs)
+        # return self.app_config
 
     async def check_sequence_update(self, sequence_config):
         if self.app_config.get("sequences", {}) != sequence_config:
@@ -605,13 +609,13 @@ class AppManagement:
             if modified_sequences != {}:
                 await self.AD.sequences.add_sequences(modified_sequences)
 
-    async def check_app_config_files(self):
+    async def check_app_config_files(self, update_actions: UpdateActions):
         """Updates self.mtimes_config and self.app_config"""
         config_files = await self.get_app_config_files()
         self.mtimes_config.update(config_files)
 
         for file in sorted(self.mtimes_config.new):
-            self.logger.debug("Found app config file: %s", file.relative_to(self.AD.app_dir.parent))
+            self.logger.debug("New app config file: %s", file.relative_to(self.AD.app_dir.parent))
 
         for file in sorted(self.mtimes_config.modified):
             self.logger.debug("Detected app config file modification: %s", file.relative_to(self.AD.app_dir.parent))
@@ -620,7 +624,30 @@ class AppManagement:
             self.logger.debug("Detected app config file deletion: %s", file.relative_to(self.AD.app_dir.parent))
 
         if self.mtimes_config.there_were_changes:
-            await self.read_all(self.mtimes_config.paths)
+            new_full_config: AllAppConfig = await self.read_all(self.mtimes_config.paths)
+            current_app_names = self.get_managed_app_names()
+
+            for name, cfg in new_full_config.root.items():
+                if name in self.non_apps:
+                    continue
+
+                if name not in current_app_names:
+                    self.logger.info(f"New app config: {name}")
+                    update_actions.apps.init.add(name)
+                else:
+                    # If an app exists, compare to the current config
+                    if cfg != self.app_config.root[name]:
+                        update_actions.apps.reload.add(name)
+
+            update_actions.apps.term = set(name for name in current_app_names if name not in self.app_config)
+
+            self.app_config = new_full_config
+
+        if self.AD.threading.auto_pin:
+            active_apps = self.app_config.active_app_count
+            if active_apps > self.AD.threading.thread_count:
+                for _ in range(active_apps - self.AD.threading.thread_count):
+                    await self.AD.threading.add_thread(silent=False, pinthread=True)
 
     def read_config_file(self, file: Path) -> AllAppConfig:
         """Reads a single YAML or TOML file.
@@ -650,6 +677,7 @@ class AppManagement:
         actions = AppActions()
         try:
             if self.mtimes_config.there_were_changes:
+                # TODO this part needs to be rethought. We still need to calculate which apps are new
                 new_full_config = self.mtimes_config
 
                 # Check for changes and deletions
@@ -709,7 +737,7 @@ class AppManagement:
                                 self.logger.warning("App '%s' missing 'class' or 'module' entry - ignoring", app_name)
 
                 self.app_config = new_full_config
-                actions.total_apps = self.app_config.app_count
+                actions.total_apps = self.app_config.active_app_count
 
                 for app_name in self.non_apps:
                     if app_name in self.app_config:
@@ -801,7 +829,7 @@ class AppManagement:
 
     def add_to_import_path(self, path: Union[str, Path]):
         path = str(path)
-        self.logger.info("Adding directory to import path: %s", path)
+        self.logger.debug("Adding directory to import path: %s", path)
         sys.path.insert(0, path)
 
     def profiler_decorator(self, func):
@@ -844,22 +872,18 @@ class AppManagement:
             update_actions = UpdateActions()
 
             if mode == UpdateMode.NORMAL:
-                await self.check_python_files(update_actions)
+                await self.check_app_python_files(update_actions)
 
-            await self.check_app_config_files()
-
-            # Refresh app config
-            app_actions = await self.check_config()
-            update_actions.apps.init |= app_actions.apps_to_initialize
-            update_actions.apps.term |= app_actions.apps_to_terminate
+            await self.check_app_config_files(update_actions)
 
             if mode == UpdateMode.TERMINATE:
-                update_actions = UpdateActions(apps=LoadingActions(term=self.app_config.app_names()))
+                update_actions.modules = LoadingActions()
+                update_actions.apps = LoadingActions(term=self.get_managed_app_names())
             else:
                 self._add_reload_apps(update_actions)
                 self._check_for_deleted_modules(update_actions)
 
-            await self._restart_plugin(plugin, app_actions)
+            await self._restart_plugin(plugin, update_actions)
 
             await self._stop_apps(update_actions)
 
@@ -935,7 +959,7 @@ class AppManagement:
         )
 
     @utils.executor_decorator
-    def check_python_files(self, update_actions: UpdateActions):
+    def check_app_python_files(self, update_actions: UpdateActions):
         """Checks
 
         Part of self.check_app_updates sequence
@@ -1014,7 +1038,7 @@ class AppManagement:
         if load_apps := (update_actions.apps.init | update_actions.apps.reload):
             self.logger.debug("Apps to be loaded: %s", load_apps)
 
-    async def _restart_plugin(self, plugin, apps: AppActions):
+    async def _restart_plugin(self, plugin, update_actions: UpdateActions):
         if plugin is not None:
             self.logger.info("Processing restart for %s", plugin)
             # This is a restart of one of the plugins so check which apps need to be restarted
@@ -1036,8 +1060,7 @@ class AppManagement:
                     reload = True
 
                 if reload is True:
-                    apps.apps_to_terminate.add(app)
-                    apps.apps_to_initialize.add(app)
+                    update_actions.apps.reload.add(app)
 
     async def _stop_apps(self, update_actions: UpdateActions):
         """Terminate apps. Returns the set of app names that failed to properly terminate.

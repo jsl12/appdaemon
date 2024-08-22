@@ -11,12 +11,12 @@ from logging import Logger
 from queue import Queue
 from random import randint
 from threading import Thread
-from typing import TYPE_CHECKING, Dict, List, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import iso8601
 
 from appdaemon import utils as utils
-from appdaemon.models.app_config import AppConfig
+from appdaemon.models.app_config import AllAppConfig, AppConfig
 
 if TYPE_CHECKING:
     from appdaemon.appdaemon import AppDaemon
@@ -151,8 +151,10 @@ class Threading:
         if self.total_threads:
             self.auto_pin = False
         else:
-            await self.AD.app_management.check_app_config_files()
-            self.total_threads, _, _ = self.AD.app_management.app_config.get_active_app_count()
+            # Force a config check here so we have an accurate activate app count
+            cfg_paths = await self.AD.app_management.get_app_config_files()
+            full_cfg: AllAppConfig = await self.AD.app_management.read_all(cfg_paths)
+            self.total_threads = full_cfg.active_app_count
 
         if self.pin_apps:
             self.pin_threads = self.pin_threads or self.total_threads
@@ -485,7 +487,7 @@ class Threading:
     # Pinning
     #
 
-    async def add_thread(self, silent: bool = False, pinthread: bool = False, id: Union[int, str] = None):
+    async def add_thread(self, silent: bool = False, pinthread: bool = False, id: Optional[Union[int, str]] = None):
         if id is None:
             tid = self.thread_count
         else:
