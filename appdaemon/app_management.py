@@ -1035,7 +1035,7 @@ class AppManagement:
             await utils.run_in_executor(self, self.process_filters)
 
             if mode == UpdateMode.INIT:
-                await self._init_update_mode()
+                await utils.run_in_executor(self, self._process_import_paths)
 
             modules: List[ModuleLoad] = []
             await self._refresh_monitored_files(modules)
@@ -1053,8 +1053,8 @@ class AppManagement:
 
             await self._load_reload_modules(apps, modules)
 
-            if mode == UpdateMode.INIT and self.AD.import_method == "expert":
-                self.logger.info(f"Loaded modules: {self.modules}")
+            if mode == UpdateMode.INIT:
+                self.logger.info(f"Loaded modules: {list(self.modules.values())}")
 
             await self._load_apps(mode, apps, apps_terminated)
 
@@ -1069,41 +1069,52 @@ class AppManagement:
 
             self.apps_initialized = True
 
-    async def _init_update_mode(self):
-        """Process one time static path additions"""
-        self.logger.info("Initializing import method: %s", self.AD.import_method)
-        if self.AD.import_method == "expert":
-            python_file_parents = set(f.parent.resolve() for f in Path(self.AD.app_dir).rglob("*.py"))
-            module_parents = set(p for p in python_file_parents if not (p / "__init__.py").exists())
+    def _process_import_paths(self):
+        """Process one time static additions to sys.path"""
+        # Get unique set of the absolute paths of all the subdirectories containing python files
+        python_file_parents = set(f.parent.resolve() for f in Path(self.AD.app_dir).rglob("*.py"))
+        # Filter out any that have __init__.py files in them
+        module_parents = set(p for p in python_file_parents if not (p / "__init__.py").exists())
 
-            package_dirs = set(p for p in python_file_parents if (p / "__init__.py").exists())
-            top_packages_dirs = set(p for p in package_dirs if not (p.parent / "__init__.py").exists())
-            package_parents = set(p.parent for p in top_packages_dirs)
+        #  unique set of the absolute paths of all subdirectories with a __init__.py in them
+        package_dirs = set(p for p in python_file_parents if (p / "__init__.py").exists())
+        # Filter by ones whose parent directory's don't also contain an __init__.py
+        top_packages_dirs = set(p for p in package_dirs if not (p.parent / "__init__.py").exists())
+        # Get the parent directories so the ones with __init__.py are importable
+        package_parents = set(p.parent for p in top_packages_dirs)
 
-            import_dirs = module_parents | package_parents
+        # keeps track of which modules go to which packages
+        self.mod_pkg_map: Dict[Path, str] = {
+            module_file: dir.stem for dir in top_packages_dirs for module_file in dir.rglob("*.py")
+        }
 
-            for path in sorted(import_dirs):
-                self.add_to_import_path(path)
+        # Combine import directories. Having the list sorted will prioritize parent folders over children during import
+        import_dirs = sorted(module_parents | package_parents)
 
-            # keeps track of which modules go to which packages
-            self.mod_pkg_map: Dict[Path, str] = {
-                module_file: dir.stem for dir in top_packages_dirs for module_file in dir.rglob("*.py")
-            }
+        for path in import_dirs:
+            self.add_to_import_path(path)
 
         # Add any aditional import paths
-        for path in self.AD.import_paths:
-            if os.path.isdir(path):
-                self.add_to_import_path(path)
-            else:
+        for path in map(Path, self.AD.import_paths):
+            if not path.exists():
                 self.logger.warning(f"import_path {path} does not exist - not adding to path")
+                continue
 
-    def get_python_files(self) -> List[Path]:
-        return [
+            if not path.is_dir():
+                self.logger.warning(f"import_path {path} is not a directory - not adding to path")
+                continue
+
+            self.add_to_import_path(path)
+
+    def get_python_files(self) -> Iterable[Path]:
+        """Iterates through *.py in the app directory. Excludes directory names defined in exclude_dirs and with a "." character. Excludes files that aren't readable."""
+        return (
             f
             for f in Path(self.AD.app_dir).resolve().rglob("*.py")
-            # Prune dir list
-            if f.parent.name not in self.AD.exclude_dirs and "." not in f.parent.name
-        ]
+            if f.parent.name not in self.AD.exclude_dirs  # apply exclude_dirs
+            and "." not in f.parent.name  # also excludes *.egg-info folders
+            and os.access(f, os.R_OK)  # skip unreadable files
+        )
 
     def module_path_from_file(self, file: Path):
         assert file in self.mod_pkg_map
@@ -1113,86 +1124,34 @@ class AppManagement:
         return module_path
 
     async def _refresh_monitored_files(self, modules: List[ModuleLoad]):
-        """Refreshes the modified times of the monitored files. Part of self.check_app_updates sequence
+        """Refreshes the modified times of the monitored files. Part of self.check_app_updates sequence"""
+        for file in self.get_python_files():
+            modified = file.stat().st_mtime
 
-        - Refreshes attributes
-            - self.monitored_files
-            - self.module_dirs
-        """
-        if self.AD.import_method == "normal":
-            found_files: List[str] = []
-            for root, subdirs, files in await utils.run_in_executor(self, os.walk, self.AD.app_dir, topdown=True):
-                # Prune dir list
-                subdirs[:] = [d for d in subdirs if d not in self.AD.exclude_dirs and "." not in d]
-
-                if utils.is_valid_root_path(root):
-                    if root not in self.module_dirs:
-                        self.logger.info("Adding %s to module import path", root)
-                        sys.path.insert(0, root)
-                        self.module_dirs.append(root)
-
-                for file in files:
-                    if file[-3:] == ".py" and file[0] != ".":
-                        found_files.append(os.path.join(root, file))
-
-            for file in found_files:
-                if file == os.path.join(self.AD.app_dir, "__init__.py"):
-                    continue
-                try:
-                    # check we can actually open the file
-                    await utils.run_in_executor(self, self.check_file, file)
-
-                    modified = await utils.run_in_executor(self, os.path.getmtime, file)
-
-                    if file in self.monitored_files:
-                        if self.monitored_files[file] < modified:
-                            modules.append(ModuleLoad(path=file, reload=True))
-                            self.monitored_files[file] = modified
+            # if the file is being monitored
+            if file in self.monitored_files:
+                # if the monitored file has been modified
+                if self.monitored_files[file] < modified:
+                    # update the modified time
+                    self.monitored_files[file] = modified
+                    # if the file is associated with a package
+                    if file in self.mod_pkg_map:
+                        modules.append(ModuleLoad(path=self.module_path_from_file(file), reload=True))
                     else:
-                        self.logger.debug("Found module %s", file)
-                        modules.append(ModuleLoad(path=file, reload=False))
-                        self.monitored_files[file] = modified
-                except IOError as err:
-                    self.logger.warning("Unable to read app %s: %s - skipping", file, err)
+                        modules.append(ModuleLoad(path=file, reload=True))
+            else:
+                # start monitoring
+                self.monitored_files[file] = modified
 
-        elif self.AD.import_method == "expert":
-            found_files: List[Path] = await utils.run_in_executor(self, self.get_python_files)
-            for file in found_files:
-                # check we can actually open the file
-                try:
-                    await utils.run_in_executor(self, self.check_file, file)
-                except IOError as err:
-                    self.logger.warning("Unable to read app %s: %s - skipping", file, err)
-
-                # file was readable during the check
+                # if it's not part of a package, add a module load config for it
+                if not file.with_name("__init__.py").exists():
+                    self.logger.info("Found module %s", file)
+                    modules.append(ModuleLoad(path=file, reload=False))
                 else:
-                    modified = await utils.run_in_executor(self, os.path.getmtime, file)
-
-                    file: Path
-                    # if the file is being monitored
-                    if file in self.monitored_files:
-                        # if the monitored file has been modified
-                        if self.monitored_files[file] < modified:
-                            # update the modified time
-                            self.monitored_files[file] = modified
-                            # if the file is associated with a package
-                            if file in self.mod_pkg_map:
-                                modules.append(ModuleLoad(path=self.module_path_from_file(file), reload=True))
-                            else:
-                                modules.append(ModuleLoad(path=file, reload=True))
-                    else:
-                        # start monitoring
-                        self.monitored_files[file] = modified
-
-                        # if it's not part of a package, add a module load config for it
-                        if not file.with_name("__init__.py").exists():
-                            self.logger.info("Found module %s", file)
-                            modules.append(ModuleLoad(path=file, reload=False))
-                        else:
-                            pkg_name: str = self.mod_pkg_map[file]
-                            names = [mod.name for mod in modules]
-                            if pkg_name not in names:
-                                modules.append(ModuleLoad(path=pkg_name, reload=False))
+                    pkg_name: str = self.mod_pkg_map[file]
+                    names = [mod.name for mod in modules]
+                    if pkg_name not in names:
+                        modules.append(ModuleLoad(path=pkg_name, reload=False))
 
     async def _check_for_deleted_modules(self, mode: UpdateMode, apps: AppActions):
         """Check for deleted modules and add them to the terminate list in the apps dict. Part of self.check_app_updates sequence"""
