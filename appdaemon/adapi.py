@@ -7,7 +7,7 @@ from asyncio import Future
 from copy import deepcopy
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import iso8601
 
@@ -3308,7 +3308,7 @@ class ADAPI:
         return await self.AD.callbacks.get_callback_entries()
 
     @utils.sync_decorator
-    async def depends_on_module(self, *modules: str) -> None:
+    async def depends_on_module(self, *modules: List[str]) -> None:
         """Registers a global_modules dependency for an app.
 
         Args:
@@ -3318,10 +3318,10 @@ class ADAPI:
             None.
 
         Examples:
-            >>> import somemodule
-            >>> import anothermodule
+            >>> import some_module
+            >>> import another_module
             >>> # later
-            >>> self.depends_on_module([somemodule)
+            >>> self.depends_on_module('some_module')
 
         """
-        return await self.AD.app_management.register_module_dependency(self.name, *modules)
+        self.log("depends_on_module is deprecated", level="WARNING")

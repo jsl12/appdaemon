@@ -26,7 +26,7 @@ from appdaemon.dependency import (
     reverse_graph,
     topo_sort,
 )
-from appdaemon.models.app_config import AllAppConfig, AppConfig, GlobalModule, GlobalModules
+from appdaemon.models.app_config import AllAppConfig, AppConfig, GlobalModule
 from appdaemon.models.internal.file_check import FileCheck
 
 if TYPE_CHECKING:
@@ -149,8 +149,8 @@ class AppManagement:
     - ``self.init_plugin_object``
     - ``self.init_sequence_object``
     """
-    active_apps: List[str]
-    inactive_apps: List[str]
+    active_apps: Set[str]
+    inactive_apps: Set[str]
     non_apps: Set[str] = {"global_modules", "sequence"}
     apps_initialized: bool = False
     check_app_updates_profile_stats: str = ""
@@ -196,9 +196,6 @@ class AppManagement:
         self.filter_files = {}
         self.objects = {}
 
-        # Keeps track of the name of the module and class to load for each app name
-        self.global_module_dependencies = {}
-
         # Add Path for adbase
         sys.path.insert(0, os.path.dirname(__file__))
 
@@ -215,8 +212,8 @@ class AppManagement:
         self.AD.services.register_service("admin", "app", "edit", self.manage_services)
         self.AD.services.register_service("admin", "app", "remove", self.manage_services)
 
-        self.active_apps = []
-        self.inactive_apps = []
+        self.active_apps = set()
+        self.inactive_apps = set()
 
         if self.AD.check_app_updates_profile:
             self.check_app_updates = self.profiler_decorator(self.check_app_updates)
@@ -241,19 +238,19 @@ class AppManagement:
     #     return wrapper
 
     # @warning_decorator
-    async def set_state(self, name, **kwargs):
+    async def set_state(self, name: str, **kwargs):
         # not a fully qualified entity name
         if name.find(".") == -1:
-            entity_id = "app.{}".format(name)
+            entity_id = f"app.{name}"
         else:
             entity_id = name
 
         await self.AD.state.set_state("_app_management", "admin", entity_id, _silent=True, **kwargs)
 
-    async def get_state(self, name, **kwargs):
+    async def get_state(self, name: str, **kwargs):
         # not a fully qualified entity name
         if name.find(".") == -1:
-            entity_id = "app.{}".format(name)
+            entity_id = f"app.{name}"
         else:
             entity_id = name
 
@@ -862,56 +859,6 @@ class AppManagement:
                 self.logger.debug("Importing '%s'", module_name)
                 importlib.import_module(module_name)
 
-        # if reload:
-        #     try:
-        #         module = self.modules[module_name]
-        #     except KeyError:
-        #         if module_name not in sys.modules:
-        #             # Probably failed to compile on initial load
-        #             # so we need to re-import not reload
-        #             self.read_app(module_name, False)
-        #         else:
-        #             # A real KeyError!
-        #             raise
-        #     else:
-        #         self.logger.info("Recursively reloading module: %s", module.__name__)
-        #         utils.recursive_reload(module)
-        # else:
-        #     app = self.get_app_from_file(module_name)
-        #     if app is not None:
-        #         if "global" in self.app_config[app] and self.app_config[app]["global"] is True:
-        #             # It's a new style global module
-        #             self.logger.info("Loading Global Module: %s", module_name)
-        #             self.modules[module_name] = importlib.import_module(module_name)
-        #         else:
-        #             # A regular app
-        #             if module_name not in self.modules:
-        #                 self.modules[module_name] = importlib.import_module(module_name)
-        #                 self.logger.info("Loaded App Module: %s", self.modules[module_name])
-        #             else:
-        #                 # We previously imported it so we need to reload to pick up any potential changes
-        #                 importlib.reload(self.modules[module_name])
-        #                 self.logger.info("Reloaded App Module: %s", self.modules[module_name])
-        #     elif "global_modules" in self.app_config and module_name in self.app_config["global_modules"]:
-        #         self.logger.info("Loading Global Module: %s", module_name)
-        #         self.modules[module_name] = importlib.import_module(module_name)
-        #     else:
-        #         if self.AD.missing_app_warnings:
-        #             self.logger.warning("No app description found for: %s - ignoring", module_name)
-
-    @staticmethod
-    def get_module_from_path(path):
-        return Path(path).stem
-
-    def get_path_from_app(self, app_name: str) -> Path:
-        """Gets the module path based on the app_name
-
-        Used in self._terminate_apps
-        """
-        module_name = self.app_config.root[app_name].module_name
-        module = sys.modules[module_name]
-        return Path(module.__file__)
-
     # Run in executor
     def _process_filters(self):
         for filter in self.AD.config.filters:
@@ -1486,50 +1433,6 @@ class AppManagement:
         app_file = utils.run_coroutine_threadsafe(self, self.get_state(app, attribute="config_path"))
         return app_file
 
-    async def register_module_dependency(self, name, *modules):
-        for module in modules:
-            module_name = None
-            if isinstance(module, str):
-                module_name = module
-            elif isinstance(module, object) and module.__class__.__name__ == "module":
-                module_name = module.__name__
-
-            if module_name is not None:
-                if (
-                    "global_modules" in self.app_config and module_name in self.app_config["global_modules"]
-                ) or self.is_global_module(module_name):
-                    if name not in self.global_module_dependencies:
-                        self.global_module_dependencies[name] = []
-
-                    if module_name not in self.global_module_dependencies[name]:
-                        self.global_module_dependencies[name].append(module_name)
-                else:
-                    self.logger.warning(
-                        "Module %s not a global_modules in register_module_dependency() for %s",
-                        module_name,
-                        name,
-                    )
-
-    def get_global_modules(self) -> Set[str]:
-        """Gets a set of all the names of global modules"""
-        # Get the global modules defined in the old (deprecated) way
-        for cfg in self.app_config.values():
-            if isinstance(cfg, GlobalModules):
-                legacy_global_modules = cfg.root
-                break
-        else:
-            legacy_global_modules = set()
-
-        # Get the global modules done in the new way
-        global_modules = set(
-            app_name for app_name, cfg in self.app_config.root.items() if isinstance(cfg, GlobalModule)
-        )
-
-        return global_modules or legacy_global_modules
-
-    def is_global_module(self, module):
-        return module in self.get_global_modules()
-
     async def manage_services(self, namespace, domain, service, kwargs):
         app = kwargs.pop("app", None)
         __name = kwargs.pop("__name", None)
@@ -1557,7 +1460,7 @@ class AppManagement:
         elif service == "reload":
             asyncio.ensure_future(self.check_app_updates(mode=UpdateMode.INIT))
 
-        elif service in ["create", "edit", "remove", "enable", "disable"]:
+        elif service in ["enable", "disable", "create", "edit", "remove"]:
             # first the check app updates needs to be stopped if on
             mode = copy.deepcopy(self.AD.production_mode)
 
@@ -1571,9 +1474,14 @@ class AppManagement:
             elif service == "disable":
                 result = await utils.run_in_executor(self, self.edit_app, app, disable=True)
 
-            else:
-                func = getattr(self, f"{service}_app")
-                result = await utils.run_in_executor(self, func, app, **kwargs)
+            elif service == "create":
+                result = await utils.run_in_executor(self, self.create_app, app, **kwargs)
+
+            elif service == "edit":
+                result = await utils.run_in_executor(self, self.edit_app, app, **kwargs)
+
+            elif service == "remove":
+                result = await utils.run_in_executor(self, self.remove_app, app, **kwargs)
 
             if mode is False:  # meaning it was not in production mode
                 await asyncio.sleep(1)
@@ -1581,30 +1489,24 @@ class AppManagement:
 
             return result
 
-        return None
-
     async def increase_active_apps(self, name: str):
+        """Marks an app as active and updates the sensors for active/inactive apps."""
         if name not in self.active_apps:
-            self.active_apps.append(name)
+            self.active_apps.add(name)
 
         if name in self.inactive_apps:
             self.inactive_apps.remove(name)
 
-        active_apps = len(self.active_apps)
-        inactive_apps = len(self.inactive_apps)
-
-        await self.set_state(self.active_apps_sensor, state=active_apps)
-        await self.set_state(self.inactive_apps_sensor, state=inactive_apps)
+        await self.set_state(self.active_apps_sensor, state=len(self.active_apps))
+        await self.set_state(self.inactive_apps_sensor, state=len(self.inactive_apps))
 
     async def increase_inactive_apps(self, name: str):
+        """Marks an app as inactive and updates the sensors for active/inactive apps."""
         if name not in self.inactive_apps:
             self.inactive_apps.append(name)
 
         if name in self.active_apps:
             self.active_apps.remove(name)
 
-        inactive_apps = len(self.inactive_apps)
-        active_apps = len(self.active_apps)
-
-        await self.set_state(self.active_apps_sensor, state=active_apps)
-        await self.set_state(self.inactive_apps_sensor, state=inactive_apps)
+        await self.set_state(self.active_apps_sensor, state=len(self.active_apps))
+        await self.set_state(self.inactive_apps_sensor, state=len(self.inactive_apps))
