@@ -318,7 +318,7 @@ class Entity:
         namespace = self._namespace
         entity_id = self._entity_id
 
-        return await self.AD.state.entity_exists(namespace, entity_id)
+        return self.AD.state.entity_exists(namespace, entity_id)
 
     @utils.sync_decorator
     async def call_service(self, service: str, **kwargs: Optional[Any]) -> Any:

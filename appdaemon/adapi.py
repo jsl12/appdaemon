@@ -631,10 +631,10 @@ class ADAPI:
         return await self.AD.app_management.get_app(name)
 
     @utils.sync_decorator
-    async def _check_entity(self, namespace, entity):
+    async def _check_entity(self, namespace: str, entity: str):
         if "." not in entity:
             raise ValueError(f"{self.name}: Invalid entity ID: {entity}")
-        if not await self.AD.state.entity_exists(namespace, entity):
+        if not self.AD.state.entity_exists(namespace, entity):
             self.logger.warning("%s: Entity %s not found in namespace %s", self.name, entity, namespace)
 
     @staticmethod

@@ -411,11 +411,8 @@ class State:
         for remove in removes:
             await self.cancel_state_callback(remove["uuid"], remove["name"])
 
-    async def entity_exists(self, namespace, entity):
-        if namespace in self.state and entity in self.state[namespace]:
-            return True
-        else:
-            return False
+    def entity_exists(self, namespace: str, entity: str):
+        return namespace in self.state and entity in self.state[namespace]
 
     def get_entity(self, namespace=None, entity_id=None, name=None):
         if namespace is None:
@@ -472,7 +469,7 @@ class State:
             self.AD.loop.create_task(self.AD.events.process_event(namespace, data))
 
     async def add_entity(self, namespace, entity, state, attributes=None):
-        if await self.entity_exists(namespace, entity):
+        if self.entity_exists(namespace, entity):
             return
 
         attrs = {}
@@ -510,7 +507,7 @@ class State:
         maybe_copy = lambda data: deepcopy(data) if copy else data  # noqa: E731
 
         if entity_id is not None and "." in entity_id:
-            if not await self.entity_exists(namespace, entity_id):
+            if not self.entity_exists(namespace, entity_id):
                 return default
             state = self.state[namespace][entity_id]
             if attribute is None and "state" in state:
@@ -633,7 +630,7 @@ class State:
         new_state["last_changed"] = utils.dt_to_str((await self.AD.sched.get_now()).replace(microsecond=0), self.AD.tz)
         self.logger.debug("Old state: %s", old_state)
         self.logger.debug("New state: %s", new_state)
-        if not await self.AD.state.entity_exists(namespace, entity):
+        if not self.AD.state.entity_exists(namespace, entity):
             if not ("_silent" in kwargs and kwargs["_silent"] is True):
                 self.logger.info("%s: Entity %s created in namespace: %s", name, entity, namespace)
 
