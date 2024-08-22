@@ -28,7 +28,6 @@ from appdaemon.dependency import (
 )
 from appdaemon.models.app_config import AllAppConfig, AppConfig, GlobalModule
 from appdaemon.models.internal.file_check import FileCheck
-from appdaemon.utils import executor_decorator
 
 if TYPE_CHECKING:
     from appdaemon.appdaemon import AppDaemon
@@ -156,13 +155,6 @@ class AppManagement:
     apps_initialized: bool = False
     check_app_updates_profile_stats: str = ""
     check_updates_lock: asyncio.Lock = asyncio.Lock()
-
-    # mod_pkg_map: Dict[Path, str] = {}
-    # """Maps python files to package names
-    # """
-    # paths_to_modules: Dict[Path, Set[str]] = {}
-    # """Maps paths of Python files to the importable names of modules they depend on
-    # """
 
     mtimes_config: FileCheck = FileCheck()
     """Keeps track of the new, modified, and deleted app configuration files
@@ -574,7 +566,7 @@ class AppManagement:
         async def read_wrapper():
             """Creates a generator that sets the config_path of app configs"""
             for path in config_files:
-                raw_cfg = await utils.run_in_executor(self, self.read_config_file, path)
+                raw_cfg = await self.read_config_file(path)
                 config_model = AllAppConfig.model_validate(raw_cfg)
                 for cfg in config_model.root.values():
                     if isinstance(cfg, AppConfig):
@@ -600,7 +592,7 @@ class AppManagement:
         new_config = None
         for path in config_files:
             valid_apps = {}
-            config: Dict[str, Dict] = await utils.run_in_executor(self, self.read_config_file, path)
+            config = await self.read_config_file(path)
 
             if not isinstance(config, dict):
                 if self.AD.invalid_config_warnings:
@@ -725,7 +717,7 @@ class AppManagement:
             if modified_sequences != {}:
                 await self.AD.sequences.add_sequences(modified_sequences)
 
-    # Run in executor
+    @utils.executor_decorator
     def check_app_config_files(self):
         """Sets the self.config_file_check attribute to a fresh instance of FileCheck that has been compared to the previous run."""
         self.mtimes_config.update(self.get_app_config_files())
@@ -741,7 +733,7 @@ class AppManagement:
             self.logger.info("Deleted app config file: %s", file.relative_to(self.AD.app_dir.parent))
             del self.app_config_files[file]
 
-    # Run in executor
+    @utils.executor_decorator
     def read_config_file(self, file: Path) -> Dict[str, Dict]:
         """Reads a single YAML or TOML file."""
         file = Path(file) if not isinstance(file, Path) else file
@@ -759,6 +751,8 @@ class AppManagement:
     async def check_config(self, silent: bool = False, add_threads: bool = True) -> Optional[AppActions]:  # noqa: C901
         """Wraps :meth:`~AppManagement.read_config`
 
+        # TODO eliminate arguments
+
         Args:
             silent (bool, optional): _description_. Defaults to False.
             add_threads (bool, optional): _description_. Defaults to True.
@@ -768,7 +762,7 @@ class AppManagement:
         """
         actions = AppActions()
         try:
-            await utils.run_in_executor(self, self.check_app_config_files)
+            await self.check_app_config_files()
             if self.mtimes_config.there_were_changes:
                 new_full_config = await self.read_all(self.mtimes_config.paths)
 
@@ -851,6 +845,7 @@ class AppManagement:
             # Now we know if we have any new apps we can create new threads if pinning
             actions.active, inactive, glbl = self.app_config.get_active_app_count()
 
+            # TODO move this part to the Threading subsystem
             if add_threads and self.AD.threading.auto_pin:
                 if actions.active > self.AD.threading.thread_count:
                     for i in range(actions.active - self.AD.threading.thread_count):
@@ -865,7 +860,7 @@ class AppManagement:
             self.logger.warning("-" * 60)
 
     # noinspection PyBroadException
-    # Run in executor
+    @utils.executor_decorator
     def import_module(self, module_name: str) -> int:
         """Reads an app into memory by importing or reloading the module it needs"""
         if mod := sys.modules.get(module_name):
@@ -882,7 +877,7 @@ class AppManagement:
                 self.logger.debug("Importing '%s'", module_name)
                 importlib.import_module(module_name)
 
-    # Run in executor
+    @utils.executor_decorator
     def _process_filters(self):
         for filter in self.AD.config.filters:
             input_files = self.AD.app_dir.rglob(f"*{filter.input_ext}")
@@ -956,11 +951,10 @@ class AppManagement:
             return
 
         async with self.check_updates_lock:
-            # Process filters
-            await utils.run_in_executor(self, self._process_filters)
+            await self._process_filters()
 
             if mode == UpdateMode.INIT:
-                await utils.run_in_executor(self, self._process_import_paths)
+                await self._process_import_paths()
 
             update_actions = UpdateActions()
 
@@ -987,6 +981,7 @@ class AppManagement:
 
             self.apps_initialized = True
 
+    @utils.executor_decorator
     def _process_import_paths(self):
         """Process one time static additions to sys.path"""
         # Get unique set of the absolute paths of all the subdirectories containing python files
@@ -1050,7 +1045,7 @@ class AppManagement:
             and os.access(f, os.R_OK)  # skip unreadable files
         )
 
-    @executor_decorator
+    @utils.executor_decorator
     def check_python_files(self, update_actions: UpdateActions):
         """Checks
 
@@ -1191,7 +1186,7 @@ class AppManagement:
             self.logger.debug("Determined module load order: %s", load_order)
             for module_name in load_order:
                 try:
-                    await utils.run_in_executor(self, self.import_module, module_name)
+                    await self.import_module(module_name)
                 except Exception:
                     self.error.warning("-" * 60)
                     self.error.warning("Unexpected error loading module: %s:", module_name)
@@ -1297,6 +1292,7 @@ class AppManagement:
 
         # return apps
 
+    @utils.executor_decorator
     def create_app(self, app: str = None, **kwargs):
         """Used to create an app, which is written to a config file"""
 
@@ -1366,6 +1362,7 @@ class AppManagement:
 
         return executed
 
+    @utils.executor_decorator
     def edit_app(self, app, **kwargs):
         """Used to edit an app, which is already in Yaml. It is expecting the app's name"""
 
@@ -1408,11 +1405,9 @@ class AppManagement:
 
         return executed
 
+    @utils.executor_decorator
     def remove_app(self, app, **kwargs):
-        """Used to remove an app
-
-        Seems to be unreferenced?
-        """
+        """Used to remove an app"""
 
         result = None
         # now get the app's file
@@ -1493,19 +1488,19 @@ class AppManagement:
                 await asyncio.sleep(0.5)
 
             if service == "enable":
-                result = await utils.run_in_executor(self, self.edit_app, app, disable=False)
+                result = await self.edit_app(app, disable=False)
 
             elif service == "disable":
-                result = await utils.run_in_executor(self, self.edit_app, app, disable=True)
+                result = await self.edit_app(app, disable=True)
 
             elif service == "create":
-                result = await utils.run_in_executor(self, self.create_app, app, **kwargs)
+                result = await self.create_app(app, **kwargs)
 
             elif service == "edit":
-                result = await utils.run_in_executor(self, self.edit_app, app, **kwargs)
+                result = await self.edit_app(app, **kwargs)
 
             elif service == "remove":
-                result = await utils.run_in_executor(self, self.remove_app, app, **kwargs)
+                result = await self.remove_app(app, **kwargs)
 
             if mode is False:  # meaning it was not in production mode
                 await asyncio.sleep(1)
