@@ -555,11 +555,14 @@ class Threading:
                 pinned_apps=pinned_apps,
             )
 
-    def app_should_be_pinned(self, app_name) -> bool:
+    def app_should_be_pinned(self, app_name: str) -> bool:
         # Check apps.yaml first - allow override
         cfg = self.AD.app_management.app_config.root[app_name]
         assert isinstance(cfg, AppConfig)
-        return cfg.pin_app or self.pin_apps
+        if cfg.pin_app is not None:
+            return cfg.pin_app
+        else:
+            return bool(self.pin_apps)
 
     async def get_app_pin(self, name: str):
         return self.AD.app_management.objects[name].pin_app

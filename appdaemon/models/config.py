@@ -78,7 +78,7 @@ class AppDaemonConfig(BaseModel, extra="forbid"):
     disable_apps: bool = False
 
     module_debug: Dict[str, str] = {}
-    pin_apps: bool = True
+    pin_apps: Optional[bool] = None
 
     load_distribution: str = "roundrobbin"
     threads: Optional[

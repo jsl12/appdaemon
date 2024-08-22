@@ -16,7 +16,7 @@ from enum import Enum
 from functools import reduce, wraps
 from logging import Logger
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Self, Set, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Self, Set, Union
 
 import appdaemon.utils as utils
 from appdaemon.dependency import (
@@ -103,7 +103,7 @@ class ManagedObject:
     object: Any
     id: str
     pin_app: bool = False
-    pin_thread: int = -1
+    pin_thread: Optional[int] = None
     running: bool = False
     use_dictionary_unpacking: bool = False
 
@@ -466,7 +466,7 @@ class AppManagement:
 
         if (pin := cfg.pin_thread) and pin >= self.AD.threading.total_threads:
             raise PinOutofRange()
-        elif obj := self.objects.get(app_name):
+        elif (obj := self.objects.get(app_name)) and obj.pin_thread is not None:
             pin = obj.pin_thread
         else:
             pin = -1
@@ -562,14 +562,8 @@ class AppManagement:
                     error_text=f"Unexepected error while reading {rel_path}",
                     # finally_text=f"{rel_path} read finish",
                 )
-                @utils.executor_decorator
-                def safe_read(self: Self, path: Path):
-                    raw_cfg = self.read_config_file(path)
-                    config_model = AllAppConfig.model_validate(raw_cfg)
-                    for cfg in config_model.root.values():
-                        if isinstance(cfg, AppConfig):
-                            cfg.config_path = path
-                    return config_model
+                async def safe_read(self: Self, path: Path):
+                    return await self.read_config_file(path)
 
                 new_cfg: AllAppConfig = await safe_read(self, path)
                 for name, cfg in new_cfg.root.items():
@@ -668,11 +662,9 @@ class AppManagement:
                 for _ in range(threads_to_add):
                     await self.AD.threading.add_thread(silent=False, pinthread=True)
 
+    @utils.executor_decorator
     def read_config_file(self, file: Path) -> AllAppConfig:
-        """Reads a single YAML or TOML file.
-
-        This has to exist as a method of AppManagement for the decorator, which makes it run in the executor, to work properly. It needs access to a `self` argument, that it uses to get the asyncio event loop and executor.
-        """
+        """Reads a single YAML or TOML file into a pydantic model. This also sets the config_path attribute of any AppConfigs."""
         raw_cfg = utils.read_config_file(file)
         if not bool(raw_cfg):
             self.logger.warning(f"Loaded an empty config file: {file.relative_to(self.AD.app_dir.parent)}")

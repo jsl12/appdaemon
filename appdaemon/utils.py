@@ -224,7 +224,7 @@ def check_state(logger, new_state, callback_state, name) -> bool:
 def sync_decorator(func):  # no type hints here, so that @wraps(func) works properly
     @wraps(func)
     def wrapper(self, *args, **kwargs):
-        if inspect.iscoroutinefunction(func):
+        if asyncio.iscoroutinefunction(func):
             task = asyncio.create_task(func(self, *args, **kwargs))
             futures: Futures = self.AD.futures
             futures.add_future(self.name, task)
@@ -315,8 +315,8 @@ def executor_decorator(func):
 
 
 def format_exception(e):
-    # return '\n\n' + ''.join(traceback.format_exception_only(e))
-    return traceback.format_exc()
+    return "\n\n" + "".join(traceback.format_exception_only(e))
+    # return traceback.format_exc()
 
 
 def warning_decorator(
