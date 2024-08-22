@@ -4,7 +4,7 @@ import traceback
 import uuid
 from copy import copy, deepcopy
 from logging import Logger
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Set, Union
 
 import appdaemon.utils as utils
 
@@ -22,12 +22,14 @@ class State:
     AD: "AppDaemon"
     logger: Logger
 
+    app_added_namespaces: Set[str]
+
     def __init__(self, ad: "AppDaemon"):
         self.AD = ad
 
         self.state = {"default": {}, "admin": {}, "rules": {}}
         self.logger = ad.logging.get_child("_state")
-        self.app_added_namespaces = []
+        self.app_added_namespaces = set()
 
         # Initialize User Defined Namespaces
         self.namespace_path.mkdir(exist_ok=True)
@@ -44,38 +46,36 @@ class State:
     def namespace_db_path(self, namespace: str) -> Path:
         return self.namespace_path / f"{namespace}.db"
 
-    async def add_namespace(self, namespace, writeback, persist, name=None):
+    async def add_namespace(self, namespace: str, writeback, persist: bool, name=None) -> Union[bool, Path]:
         """Used to Add Namespaces from Apps"""
 
-        if namespace in self.state:  # it already exists
+        if self.namespace_exists(namespace):
             self.logger.warning("Namespace %s already exists. Cannot process add_namespace from %s", namespace, name)
             return False
 
-        if persist is True:
-            nspath_file = await utils.run_in_executor(self, self.add_persistent_namespace, namespace, writeback)
+        if persist:
+            nspath_file = await self.add_persistent_namespace(namespace, writeback)
 
         else:
             nspath_file = None
             self.state[namespace] = {}
 
-        self.app_added_namespaces.append(namespace)
+        self.app_added_namespaces.add(namespace)
 
-        data = {
-            "event_type": "__AD_NAMESPACE_ADDED",
-            "data": {"namespace": namespace, "writeback": writeback, "database_filename": nspath_file},
-        }
+        await self.AD.events.process_event(
+            "admin",
+            data={
+                "event_type": "__AD_NAMESPACE_ADDED",
+                "data": {"namespace": namespace, "writeback": writeback, "database_filename": nspath_file},
+            },
+        )
 
-        await self.AD.events.process_event("admin", data)
-
-        # @todo need to update and reload the admin page to show the new namespace in real-time
+        # TODO need to update and reload the admin page to show the new namespace in real-time
 
         return nspath_file
 
-    async def namespace_exists(self, namespace):
-        if namespace in self.state:
-            return True
-        else:
-            return False
+    def namespace_exists(self, namespace: str) -> bool:
+        return namespace in self.state
 
     async def remove_namespace(self, namespace):
         """Used to Remove Namespaces from Apps"""
@@ -83,19 +83,19 @@ class State:
         result = None
         if namespace in self.app_added_namespaces:
             result = self.state.pop(namespace)
-            nspath_file = await utils.run_in_executor(self, self.remove_persistent_namespace, namespace)
+            nspath_file = await self.remove_persistent_namespace(namespace)
             self.app_added_namespaces.remove(namespace)
 
             self.logger.warning("Namespace %s, has ben removed", namespace)
 
-            data = {
-                "event_type": "__AD_NAMESPACE_REMOVED",
-                "data": {"namespace": namespace, "database_filename": nspath_file},
-            }
-
-            await self.AD.events.process_event("admin", data)
-
-            # @todo need to update and reload the admin page to show the removed namespace in real-time
+            await self.AD.events.process_event(
+                "admin",
+                {
+                    "event_type": "__AD_NAMESPACE_REMOVED",
+                    "data": {"namespace": namespace, "database_filename": nspath_file},
+                },
+            )
+            # TODO need to update and reload the admin page to show the removed namespace in real-time
 
         elif namespace in self.state:
             self.logger.warning("Cannot delete namespace %s, as not an app defined namespace", namespace)
@@ -105,19 +105,20 @@ class State:
 
         return result
 
-    def add_persistent_namespace(self, namespace, writeback):
+    @utils.executor_decorator
+    def add_persistent_namespace(self, namespace, writeback) -> Path:
         """Used to add a database file for a created namespace"""
 
         try:
             if namespace in self.state and isinstance(self.state[namespace], utils.PersistentDict):
-                self.logger.info("Persistent Namespace '%s' already initialized", namespace)
+                self.logger.info("Persistent namespace '%s' already initialized", namespace)
                 return
 
             ns_db_path = self.namespace_db_path(namespace)
             safe = bool(writeback == "safe")
             self.state[namespace] = utils.PersistentDict(ns_db_path, safe)
 
-            self.logger.info("Persistent Namespace '%s' initialized", namespace)
+            self.logger.info("Persistent namespace '%s' initialized", namespace)
 
         except Exception:
             self.logger.warning("-" * 60)
@@ -128,7 +129,8 @@ class State:
 
         return ns_db_path
 
-    def remove_persistent_namespace(self, namespace: str):
+    @utils.executor_decorator
+    def remove_persistent_namespace(self, namespace: str) -> Path:
         """Used to remove the file for a created namespace"""
 
         try:
@@ -414,7 +416,7 @@ class State:
     def entity_exists(self, namespace: str, entity: str):
         return namespace in self.state and entity in self.state[namespace]
 
-    def get_entity(self, namespace=None, entity_id=None, name=None):
+    def get_entity(self, namespace: Optional[str] = None, entity_id: Optional[str] = None, name: Optional[str] = None):
         if namespace is None:
             return deepcopy(self.state)
 
@@ -435,7 +437,7 @@ class State:
             self.logger.warning("Unknown namespace: %s requested by %s", namespace, name)
             return None
 
-    async def remove_entity(self, namespace, entity):
+    async def remove_entity(self, namespace: str, entity: str):
         """Removes an entity.
 
         If the namespace does not have a plugin associated with it, the entity will be removed locally only.
@@ -620,7 +622,7 @@ class State:
         else:
             self.logger.warning("Unknown service in state service call: %s", kwargs)
 
-    async def set_state(self, name, namespace, entity, **kwargs):
+    async def set_state(self, name: str, namespace: str, entity: str, **kwargs):
         self.logger.debug("set_state(): %s, %s", entity, kwargs)
         if entity in self.state[namespace]:
             old_state = deepcopy(self.state[namespace][entity])

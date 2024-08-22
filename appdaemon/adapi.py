@@ -500,7 +500,7 @@ class ADAPI:
             >>>     #do something like create it
 
         """
-        return await self.AD.state.namespace_exists(namespace)
+        return self.AD.state.namespace_exists(namespace)
 
     @utils.sync_decorator
     async def add_namespace(self, namespace: str, **kwargs) -> Union[str, None]:

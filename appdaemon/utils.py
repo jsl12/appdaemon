@@ -102,7 +102,7 @@ class PersistentDict(shelve.DbfilenameShelf):
     Dict-like object that uses a Shelf to persist its contents.
     """
 
-    def __init__(self, filename, safe, *args, **kwargs):
+    def __init__(self, filename, safe: bool, *args, **kwargs):
         # writeback=True allows for mutating objects in place, like with a dict.
         super().__init__(filename, writeback=True)
         self.safe = safe
