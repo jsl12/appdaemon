@@ -16,7 +16,7 @@ from enum import Enum
 from functools import reduce, wraps
 from logging import Logger
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Set, Union
 
 import appdaemon.utils as utils
 from appdaemon.dependency import (
@@ -28,6 +28,7 @@ from appdaemon.dependency import (
 )
 from appdaemon.models.app_config import AllAppConfig, AppConfig, GlobalModule
 from appdaemon.models.internal.file_check import FileCheck
+from appdaemon.utils import executor_decorator
 
 if TYPE_CHECKING:
     from appdaemon.appdaemon import AppDaemon
@@ -124,15 +125,6 @@ class AppInstantiationError(Exception):
 
 class AppInitializeError(Exception):
     pass
-
-
-def executor_decorator(func):
-    @wraps(func)
-    async def wrapper(self, *args, **kwargs):
-        self.logger.debug(f"Running in executor...{func.__name__} with {args} and {kwargs}")
-        return await utils.run_in_executor(self, func, self, *args, **kwargs)
-
-    return wrapper
 
 
 class AppManagement:
@@ -932,7 +924,7 @@ class AppManagement:
         self.logger.info("Adding directory to import path: %s", path)
         sys.path.insert(0, path)
 
-    def profiler_decorator(self, func: Coroutine):
+    def profiler_decorator(self, func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             pr = cProfile.Profile()
@@ -950,7 +942,7 @@ class AppManagement:
 
         return wrapper
 
-    # @_timeit
+    # @utils.timeit
     async def check_app_updates(self, plugin: str = None, mode: UpdateMode = UpdateMode.NORMAL):  # noqa: C901
         """Checks the states of the Python files that define the apps, reloading when necessary.
 
@@ -972,7 +964,6 @@ class AppManagement:
 
             update_actions = UpdateActions()
 
-            # await utils.run_in_executor(self, self.check_python_files, update_actions)
             await self.check_python_files(update_actions)
 
             # Refresh app config
@@ -1060,7 +1051,7 @@ class AppManagement:
         )
 
     @executor_decorator
-    def check_python_files(self, update_actions: UpdateActions) -> List[str]:
+    def check_python_files(self, update_actions: UpdateActions):
         """Checks
 
         Part of self.check_app_updates sequence

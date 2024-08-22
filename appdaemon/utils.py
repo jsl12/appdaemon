@@ -21,7 +21,7 @@ from datetime import timedelta
 from functools import wraps
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Dict, Type
+from typing import Any, Dict, Type, TYPE_CHECKING
 
 import dateutil.parser
 import tomli
@@ -31,7 +31,9 @@ import yaml
 from appdaemon.futures import Futures
 from appdaemon.version import __version__  # noqa: F401
 
-# Comment
+if TYPE_CHECKING:
+    from appdaemon.appdaemon import AppDaemon
+
 
 if platform.system() != "Windows":
     import pwd
@@ -231,17 +233,19 @@ def sync_decorator(func):  # no type hints here, so that @wraps(func) works prop
     return wrapper
 
 
-def _timeit(func):
+def timeit(func):
     @wraps(func)
-    def newfunc(*args, **kwargs):
-        self = args[0]
-        start_time = time.time()
-        result = func(self, *args, **kwargs)
-        elapsed_time = time.time() - start_time
-        self.logger.info("function [%s] finished in %s ms", func.__name__, int(elapsed_time * 1000))
-        return result
+    async def wrapper(self, *args, **kwargs):
+        start_time = time.perf_counter()
+        try:
+            return await func(self, *args, **kwargs)
+        except Exception as e:
+            self.logger.exception(e)
+        finally:
+            elapsed_time = time.perf_counter() - start_time
+            self.logger.debug(f"Finished [{func.__name__}] in {elapsed_time * 10**3:.0f} ms")
 
-    return newfunc
+    return wrapper
 
 
 def _profile_this(fn):
@@ -290,6 +294,19 @@ def day_of_week(day):
     if isinstance(day, int):
         return nums[day]
     raise ValueError("Incorrect type for 'day' in day_of_week()'")
+
+
+def executor_decorator(func):
+    """Use this decorator on class methods to have them run in the executor"""
+
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        ad: "AppDaemon" = self.AD
+        preloaded_function = functools.partial(func, self, *args, **kwargs)
+        future = ad.loop.run_in_executor(executor=ad.executor, func=preloaded_function)
+        return await future
+
+    return wrapper
 
 
 async def run_in_executor(self, fn, *args, **kwargs) -> Any:
