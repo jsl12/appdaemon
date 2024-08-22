@@ -40,13 +40,17 @@ def resolve_relative_import(node: ast.ImportFrom, path: Path):
     full_module_name = get_full_module_name(path)
     parts = full_module_name.split(".")
 
-    if node.module:
-        # if the node.level is one, then it makes the parts list empty, which is not what we want
-        parts = parts[: -node.level + 1] or parts
-        parts.append(node.module)
-    else:
-        for _ in range(node.level - 1):
+    if node.level:
+        levels_to_remove = node.level
+        if path.name == "__init__.py":
+            levels_to_remove -= 1
+        for _ in range(levels_to_remove):
             parts.pop(-1)
+    else:
+        parts = node.module.split(".")
+
+    if node.module:
+        parts.append(node.module)
 
     res = ".".join(parts)
     # assert res in sys.modules

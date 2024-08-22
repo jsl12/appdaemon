@@ -1000,8 +1000,6 @@ class AppManagement:
                 await utils.run_in_executor(self, self._process_import_paths)
 
             module_load_order: List[str] = await utils.run_in_executor(self, self._check_python_files)
-            if module_load_order:
-                self.logger.debug("Determined module load order: %s", module_load_order)
 
             affected_apps = self._add_reload_apps(module_load_order)
             if affected_apps:
@@ -1119,6 +1117,9 @@ class AppManagement:
         current_python_files.compare_to_previous(self.mtimes_python)
         self.mtimes_python = current_python_files
 
+        if self.mtimes_python.there_were_changes:
+            self.logger.debug("=" * 50)
+
         if new := self.mtimes_python.new:
             self.logger.debug("New Python files: %s", len(new))
         if mod := self.mtimes_python.modified:
@@ -1148,6 +1149,7 @@ class AppManagement:
 
             # only actually use the ones that come from new and/or modified files
             load_order = [m for m in topo_sort(sub_deps) if m in to_load]
+            self.logger.debug("Initial module load order: %s", load_order)
             return load_order
         else:
             return []
