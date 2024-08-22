@@ -1,11 +1,11 @@
-import appdaemon.adbase as adbase
+from typing import Any, Callable, Optional, Union
+
 import appdaemon.adapi as adapi
-from appdaemon.appdaemon import AppDaemon
+import appdaemon.adbase as adbase
 import appdaemon.utils as utils
-
-from typing import Callable, Union, Optional, Any
-
+from appdaemon.appdaemon import AppDaemon
 from appdaemon.models.app_config import AppConfig
+from appdaemon.plugins.mqtt.mqttplugin import MqttPlugin
 
 
 class Mqtt(adbase.ADBase, adapi.ADAPI):
@@ -148,7 +148,7 @@ class Mqtt(adbase.ADBase, adapi.ADAPI):
         """
 
         namespace = self._get_namespace(**kwargs)
-        plugin = await self.AD.plugins.get_plugin_object(namespace)
+        plugin: MqttPlugin = await self.AD.plugins.get_plugin_object(namespace)
         topic = kwargs.get("topic", kwargs.get("wildcard"))
 
         if plugin is not None:
