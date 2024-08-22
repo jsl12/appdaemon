@@ -376,14 +376,12 @@ class Logging:
                 return lvl
         return "UNKNOWN"
 
-    def separate_error_log(self):
-        if (
+    def separate_error_log(self) -> bool:
+        return (
             self.config["error_log"]["filename"] != "STDERR"
             and self.config["main_log"]["filename"] != "STDOUT"
             and not self.is_alias("error_log")
-        ):
-            return True
-        return False
+        )
 
     def register_ad(self, ad: "AppDaemon"):
         """Adds a reference to the top-level ``AppDaemon`` object. This is necessary because the Logging object gets created first."""

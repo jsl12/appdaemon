@@ -556,7 +556,7 @@ class Threading:
                 pinned_apps=pinned_apps,
             )
 
-    def app_should_be_pinned(self, name):
+    def app_should_be_pinned(self, name) -> bool:
         # Check apps.yaml first - allow override
         app = self.AD.app_management.app_config[name]
         if "pin_app" in app:

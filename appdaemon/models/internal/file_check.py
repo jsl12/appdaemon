@@ -4,11 +4,15 @@ from typing import Dict, Iterable, Self, Set
 from pydantic import BaseModel, Field
 
 
-class AppConfigFileCheck(BaseModel):
+class FileCheck(BaseModel):
     mtimes: Dict[Path, float] = Field(default_factory=dict)
     new: Set[Path] = Field(default_factory=set)
     modified: Set[Path] = Field(default_factory=set)
     deleted: Set[Path] = Field(default_factory=set)
+
+    @classmethod
+    def from_iterable(cls, iter: Iterable[Path]) -> Self:
+        return cls(mtimes={p: p.stat().st_mtime for p in iter})
 
     @property
     def latest(self) -> float:
@@ -26,12 +30,12 @@ class AppConfigFileCheck(BaseModel):
         yield from self.mtimes.keys()
 
     @property
+    def __iter__(self):
+        return self.mtimes.__iter__
+
+    @property
     def there_were_changes(self) -> bool:
         return bool(self.new) or bool(self.modified) or bool(self.deleted)
-
-    @classmethod
-    def from_iterable(cls, iter: Iterable[Path]) -> Self:
-        return cls(mtimes={p: p.stat().st_mtime for p in iter})
 
     def compare_to_previous(self, previous: Self):
         for file, mtime in self.mtimes.items():
@@ -51,3 +55,7 @@ class AppConfigFileCheck(BaseModel):
         for file in previous.paths:
             if file not in self.mtimes:
                 self.deleted.add(file)
+
+
+class AppConfigFileCheck(FileCheck):
+    pass

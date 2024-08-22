@@ -21,7 +21,7 @@ from datetime import timedelta
 from functools import wraps
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Dict
+from typing import Any, Dict, Type
 
 import dateutil.parser
 import tomli
@@ -785,3 +785,56 @@ def recursive_reload(module: ModuleType, reloaded: set = None):
 
     importlib.reload(module)
     reloaded.add(module.__name__)
+
+
+def count_positional_arguments(app_class: Type) -> int:
+    return len(
+        [
+            p
+            for p in inspect.signature(app_class.__init__).parameters.values()
+            if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD or p.kind == inspect.Parameter.VAR_POSITIONAL
+        ]
+    )
+
+
+class CircularDependency(Exception):
+    pass
+
+
+def topo_sort(graph: dict[str, set[str]]) -> list[str]:
+    visited = list()
+    stack = list()
+    rec_stack = set()  # Set to track nodes in the current recursion stack
+    cycle_detected = False  # Flag to indicate cycle detection
+
+    def _node_gen():
+        for node, edges in graph.items():
+            yield node
+            yield from edges
+
+    nodes = set(_node_gen())
+
+    def visit(node: str):
+        nonlocal cycle_detected
+        if node in rec_stack:
+            cycle_detected = True
+            return
+        elif node in visited:
+            return
+
+        visited.append(node)
+        rec_stack.add(node)
+
+        for adj_node in graph.get(node, set()):
+            visit(adj_node)
+
+        rec_stack.remove(node)
+        stack.append(node)
+
+    for node in nodes:
+        if node not in visited:
+            visit(node)
+            if cycle_detected:
+                raise CircularDependency(f"Visited {visited} already and was going visit {node} again")
+
+    return stack
