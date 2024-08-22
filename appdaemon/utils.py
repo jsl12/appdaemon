@@ -318,8 +318,8 @@ def executor_decorator(func):
 
 
 def format_exception(e):
-    return "\n\n" + "".join(traceback.format_exception_only(e))
-    # return traceback.format_exc()
+    # return "\n\n" + "".join(traceback.format_exception_only(e))
+    return traceback.format_exc()
 
 
 def warning_decorator(
