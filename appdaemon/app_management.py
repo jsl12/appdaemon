@@ -988,15 +988,6 @@ class AppManagement:
         Args:
             plugin (str, optional): Plugin to restart, if necessary. Defaults to None.
             mode (UpdateMode, optional): Defaults to UpdateMode.NORMAL.
-
-        Check Process:
-            - Refresh modified times of monitored files.
-            - Checks for deleted files
-            - Marks the apps for reloading or removal as necessary
-            - Restarts the plugin, if specified
-            - Terminates apps as necessary
-            - Loads or reloads modules/pacakges as necessary
-            - Loads apps from the modules/packages
         """
         if not self.AD.apps:
             return
@@ -1009,9 +1000,6 @@ class AppManagement:
                 await utils.run_in_executor(self, self._process_import_paths)
 
             module_load_order: List[str] = await utils.run_in_executor(self, self._check_python_files)
-            if module_load_order:
-                self.logger.debug("Determined module load order: %s", module_load_order)
-
             affected_apps = self._add_reload_apps(module_load_order)
             if affected_apps:
                 self.logger.debug("Apps affected by (re)loading modules: %s", affected_apps)
@@ -1031,13 +1019,15 @@ class AppManagement:
                     self.logger.debug("Removing %s apps because they failed to stop cleanly", len(failed_to_stop))
                     affected_apps -= failed_to_stop
 
+                self.logger.debug("Determined module load order: %s", module_load_order)
                 failed_to_import = await self._import_modules(module_load_order)
                 if failed_to_import:
                     self.logger.debug("Removing %s apps because their modules failed to import", len(failed_to_import))
                     affected_apps -= failed_to_import
 
-                dep_graph = self.app_config.depedency_graph()
+                dep_graph = self.app_config.reversed_dependency_graph()
                 sub_graph = {app_name: dep_graph[app_name] for app_name in affected_apps}
+                sub_graph = reverse_graph(sub_graph)
                 app_load_order = topo_sort(sub_graph)
                 self.logger.debug("Determined app load order: %s", app_load_order)
 
@@ -1152,7 +1142,7 @@ class AppManagement:
 
             # get the subset of the dependencies that apply to the modules to load
             to_load = modules | dependents
-            sub_deps = {m: self.module_dependencies[m] for m in to_load}
+            sub_deps = {m: reversed_graph[m] for m in to_load}
             load_order = topo_sort(sub_deps)
             return load_order
         else:
@@ -1181,6 +1171,7 @@ class AppManagement:
         Part of self.check_app_updates sequence
         """
         # globals
+        # self.module_dependencies[]
 
         # Find apps that need to be initialized because their module is in the list to load
         affected_apps = set(
@@ -1189,44 +1180,6 @@ class AppManagement:
             if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in load_order
         )
         return affected_apps
-
-        # for module_name in loading_actions.load:
-        #     for app_name in self.apps_per_module(module_name):
-        #         app_actions.apps_to_initialize.add(app_name)
-
-        # for gbl in globals:
-        #     if gbl == self.get_module_from_path(module):
-        #         for app
-
-        # reload_apps = set(
-        #     app_name for module_name in reload_order.reload for app_name in self.apps_per_module(module_name)
-        # )
-        # app_actions.apps_to_initialize |= reload_apps
-        # app_actions.apps_to_terminate |= reload_apps
-        # return app_actions
-
-        # for module in (loading_actions.load or loading_actions.reload):
-        #     for gm in self.get_global_modules():
-        #         if gm == self.get_module_from_path(module):
-        #             for app in self.apps_per_global_module(gm):
-        #                 app_actions.apps_to_initialize.add(app)
-        #                 if module.reload:
-        #                     app_actions.apps_to_terminate.add(app)
-
-        # for module in modules:
-        #     app_names = self.apps_per_module(module.name)
-        #     self.logger.info("%s apps come from %s", len(app_names), module.name)
-        #     for app in app_names:
-        #         apps.apps_to_initialize.add(app)
-        #         if module.reload:
-        #             apps.apps_to_terminate.add(app)
-
-        #     for gm in self.get_global_modules():
-        #         if gm == self.get_module_from_path(module.name):
-        #             for app in self.apps_per_global_module(gm):
-        #                 apps.apps_to_initialize.add(app)
-        #                 if module.reload:
-        #                     apps.apps_to_terminate.add(app)
 
     async def _restart_plugin(self, plugin, apps: AppActions):
         if plugin is not None:
@@ -1261,12 +1214,14 @@ class AppManagement:
         failed_to_stop = set()  # stores apps that had a problem terminating
 
         dep_graph = self.app_config.depedency_graph()
+        rev_graph = reverse_graph(dep_graph)
         app_deps = {
-            name: dep_graph[name]
+            name: rev_graph[name]
             for name in app_names
             if name in self.objects  # filters by apps that are already created
         }
-        stop_order = topo_sort(app_deps)[::-1]
+        stop_order = topo_sort(app_deps)
+        self.logger.debug("Determined app stop order: %s", stop_order)
 
         for app_name in stop_order:
             if not await self.stop_app(app_name):

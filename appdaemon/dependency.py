@@ -105,7 +105,8 @@ def get_all_nodes(deps: Graph) -> Set[str]:
     def _gen():
         for node, node_deps in deps.items():
             yield node
-            yield from node_deps
+            if node_deps:
+                yield from node_deps
 
     return set(_gen())
 
@@ -115,8 +116,9 @@ def reverse_graph(graph: Graph) -> Graph:
     reversed_graph = {n: set() for n in get_all_nodes(graph)}
 
     for module, dependencies in graph.items():
-        for dependency in dependencies:
-            reversed_graph[dependency].add(module)
+        if dependencies:
+            for dependency in dependencies:
+                reversed_graph[dependency].add(module)
 
     return reversed_graph
 

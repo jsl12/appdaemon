@@ -5,6 +5,8 @@ from pydantic_core import PydanticUndefinedType
 import yaml
 from pydantic import BaseModel, Field, RootModel, field_validator, model_validator
 
+from ..dependency import reverse_graph
+
 
 class GlobalModules(RootModel):
     root: Set[str]
@@ -98,11 +100,16 @@ class AllAppConfig(RootModel):
         return self
 
     def depedency_graph(self) -> Dict[str, Set[str]]:
+        """Maps the app names to the other apps that they depend on"""
         return {
             app_name: cfg.dependencies
             for app_name, cfg in self.root.items()
             if isinstance(cfg, (AppConfig, GlobalModule))
         }
+
+    def reversed_dependency_graph(self) -> Dict[str, Set[str]]:
+        """Maps each app to the other apps that depend on it"""
+        return reverse_graph(self.depedency_graph())
 
     def app_definitions(self) -> List[Tuple[str, AppConfig]]:
         return [(app_name, cfg) for app_name, cfg in self.root.items() if isinstance(cfg, AppConfig)]
