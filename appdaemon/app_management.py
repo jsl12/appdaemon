@@ -1142,7 +1142,7 @@ class AppManagement:
 
             # get the subset of the dependencies that apply to the modules to load
             to_load = modules | dependents
-            sub_deps = {m: reversed_graph[m] for m in to_load}
+            sub_deps = {m: self.module_dependencies[m] for m in to_load}
             load_order = topo_sort(sub_deps)
             return load_order
         else:
