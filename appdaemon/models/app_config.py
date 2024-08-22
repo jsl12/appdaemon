@@ -13,7 +13,7 @@ class GlobalModules(RootModel):
 class GlobalModule(BaseModel):
     global_: bool = Field(alias="global")
     module_name: str = Field(alias="module")
-    dependencies: Optional[Set[str]] = None
+    dependencies: Set[str] = {}
 
 
 class SequenceStep(RootModel):
@@ -42,7 +42,7 @@ class AppConfig(BaseModel, extra="allow"):
     dependencies: Optional[Set[str]] = None
     """Other apps that this app depends on. They are guaranteed to be loaded and started before this one.
     """
-    global_dependencies: Optional[Set[str]] = None
+    global_dependencies: Set[str] = {}
     """Global modules that this app depends on.
     """
     disable: bool = False
