@@ -572,7 +572,7 @@ class AppManagement:
                 self.logger.warning(f"Apps re-defined: {overlap}")
             return d1.update(d2) or d1
 
-        models = [m.model_dump(by_alias=True, exclude_unset=True) for m in config_model_factory()]
+        models = [m.model_dump(by_alias=True, exclude_unset=True) for m in config_model_factory() if m is not None]
         combined_configs = reduce(update, models, {})
         self.app_config = AllAppConfig.model_validate(combined_configs)
         return self.app_config
@@ -606,18 +606,18 @@ class AppManagement:
                 await self.AD.sequences.add_sequences(modified_sequences)
 
     async def check_app_config_files(self):
-        """Sets the self.config_file_check attribute to a fresh instance of FileCheck that has been compared to the previous run."""
+        """Updates self.mtimes_config and self.app_config"""
         config_files = await self.get_app_config_files()
         self.mtimes_config.update(config_files)
 
         for file in sorted(self.mtimes_config.new):
-            self.logger.info("Found app config file: %s", file.relative_to(self.AD.app_dir.parent))
+            self.logger.debug("Found app config file: %s", file.relative_to(self.AD.app_dir.parent))
 
         for file in sorted(self.mtimes_config.modified):
-            self.logger.info("Detected app config file modification: %s", file.relative_to(self.AD.app_dir.parent))
+            self.logger.debug("Detected app config file modification: %s", file.relative_to(self.AD.app_dir.parent))
 
         for file in sorted(self.mtimes_config.deleted):
-            self.logger.info("Detected app config file deletion: %s", file.relative_to(self.AD.app_dir.parent))
+            self.logger.debug("Detected app config file deletion: %s", file.relative_to(self.AD.app_dir.parent))
 
         if self.mtimes_config.there_were_changes:
             await self.read_all(self.mtimes_config.paths)

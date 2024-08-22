@@ -19,7 +19,7 @@ class FilterConfig(BaseModel):
     output_ext: str
 
 
-class AppDaemonConfig(BaseModel):
+class AppDaemonConfig(BaseModel, extra="forbid"):
     latitude: float
     longitude: float
     elevation: int
@@ -58,6 +58,7 @@ class AppDaemonConfig(BaseModel):
     qsize_warning_iterations: int = 10
     internal_function_timeout: int = 10
     use_dictionary_unpacking: bool = False
+    uvloop: bool = False
     use_stream: bool = False
     import_paths: List[Path] = []
     namespaces: Dict[str, Dict] = {}

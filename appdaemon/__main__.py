@@ -10,6 +10,7 @@ also creates the loop and kicks everything off
 
 import argparse
 import asyncio
+import logging
 import os
 import platform
 import signal
@@ -17,6 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
+from pydantic import ValidationError
 import pytz
 
 import appdaemon.appdaemon as ad
@@ -172,7 +174,8 @@ class ADMain:
             self.AD.terminate()
 
             self.logger.info("AppDaemon is stopped.")
-
+        except ValidationError as e:
+            logging.getLogger().exception(e)
         except Exception:
             self.logger.warning("-" * 60)
             self.logger.warning("Unexpected error during run()")

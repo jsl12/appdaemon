@@ -329,8 +329,7 @@ def warning_decorator(
                 result = func(self, *args, **kwargs)
 
             except Exception:
-                ad: "AppDaemon" = self.ad
-                error_logger = ad.logging.get_error().getChild(self.name)
+                error_logger = self.error
                 error_logger.warning("-" * 60)
                 nonlocal error_text
                 error_text = error_text or f"Unexpected error running {func.__qualname__}"
@@ -338,7 +337,6 @@ def warning_decorator(
                 error_logger.warning("-" * 60)
                 error_logger.warning(traceback.format_exc())
                 error_logger.warning("-" * 60)
-
             else:
                 if success_text:
                     self.logger.debug(success_text)
