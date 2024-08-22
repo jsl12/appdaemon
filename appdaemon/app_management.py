@@ -711,21 +711,18 @@ class AppManagement:
     # Run in executor
     def check_app_config_files(self):
         """Sets the self.config_file_check attribute to a fresh instance of FileCheck that has been compared to the previous run."""
-        current_config_files = FileCheck.from_paths(self.get_app_config_files())
-        current_config_files.compare_to_previous(self.mtimes_config)
+        self.mtimes_config.update(self.get_app_config_files())
 
-        for file in sorted(current_config_files.new):
+        for file in sorted(self.mtimes_config.new):
             self.logger.info("Added app config file: %s", file.relative_to(self.AD.app_dir.parent))
             self.app_config_files[file] = set()
 
-        for file in sorted(current_config_files.modified):
+        for file in sorted(self.mtimes_config.modified):
             self.logger.info("Modified app config file: %s", file.relative_to(self.AD.app_dir.parent))
 
-        for file in sorted(current_config_files.deleted):
+        for file in sorted(self.mtimes_config.deleted):
             self.logger.info("Deleted app config file: %s", file.relative_to(self.AD.app_dir.parent))
             del self.app_config_files[file]
-
-        self.mtimes_config = current_config_files
 
     # Run in executor
     def read_config_file(self, file: Path) -> Dict[str, Dict]:
@@ -1001,7 +998,7 @@ class AppManagement:
 
             update_actions = UpdateActions()
 
-            await utils.run_in_executor(self, self._check_python_files, update_actions)
+            await utils.run_in_executor(self, self.check_python_files, update_actions)
 
             # Refresh app config
             app_actions = await self.check_config()
@@ -1088,74 +1085,37 @@ class AppManagement:
             and os.access(f, os.R_OK)  # skip unreadable files
         )
 
-    def _check_python_files(self, update_actions: UpdateActions) -> List[str]:
-        """Determines which modules should be imported based on which files are new or have been changed.
+    def check_python_files(self, update_actions: UpdateActions) -> List[str]:
+        """Checks
 
         Part of self.check_app_updates sequence
         """
-
-        current_python_files = FileCheck.from_paths(self.get_python_files())
-        current_python_files.compare_to_previous(self.mtimes_python)
-        self.mtimes_python = current_python_files
+        self.mtimes_python.update(self.get_python_files())
 
         if self.mtimes_python.there_were_changes:
-            self.logger.debug("=" * 50)
+            self.logger.debug(" Python file changes ".center(75, "="))
 
         if new := self.mtimes_python.new:
             self.logger.info("New Python files: %s", len(new))
-            update_actions.modules.init = set(map(get_full_module_name, new))
+            dep_graph = get_dependency_graph(new)
+            self.module_dependencies.update(dep_graph)
+            update_actions.modules.init = set(dep_graph.keys())
+
         if mod := self.mtimes_python.modified:
             self.logger.info("Modified Python files: %s", len(mod))
-            update_actions.modules.reload = set(map(get_full_module_name, mod))
+            dep_graph = get_dependency_graph(mod)
+            self.module_dependencies.update(dep_graph)
+            update_actions.modules.reload = set(dep_graph.keys())
+
         if deleted := self.mtimes_python.deleted:
             self.logger.info("Deleted Python files: %s", len(deleted))
-            update_actions.modules.term = set(map(get_full_module_name, deleted))
+            deleted_modules = set(map(get_full_module_name, deleted))
+            update_actions.modules.term = deleted_modules
+            for del_mod in deleted_modules:
+                del self.module_dependencies[del_mod]
 
-        if files := (self.mtimes_python.new | self.mtimes_python.modified):
-            self._update_dep_graph(files)
-
-        # Get the paths to all the new/modified Python files
-        # files = self.mtimes_python.new | self.mtimes_python.modified
-        # if bool(files):
-        #     # Get the dependency graph for those files
-        #     dep_graph = get_dependency_graph(files)
-
-        #     # Update the master dependency graph
-        #     self.module_dependencies.update(dep_graph)
-
-        #     # Reverse the graph so that it maps each module to the other modules that import it
-        #     self.reversed_graph = reverse_graph(self.module_dependencies)
-
-        #     # Start the set of full module names to load with the keys of the dependency graph
-        #     to_load = set(dep_graph.keys())
-
-        #     # Add modules that depend on any of the new/modified modules to the set of modules to load
-        #     to_load |= find_all_dependents(to_load, self.reversed_graph)
-
-        #     # Get the dependencies of the full set modules to load
-        #     sub_deps = {m: self.module_dependencies[m] for m in to_load}
-
-        #     # Only actually use the ones that come from new/modified files and their dependents
-        #     load_order = [
-        #         m
-        #         for m in topo_sort(sub_deps)
-        #         if m in to_load  # This filters out modules that aren't in the set to load
-        #     ]
-        #     self.logger.debug("Module load order: %s", load_order)
-        #     return load_order
-        # else:
-        #     return []
-
-    def _update_dep_graph(self, files: Iterable[Path]):
-        if files := self.mtimes_python.new | self.mtimes_python.modified:
-            # Get the dependency graph for those files
-            dep_graph = get_dependency_graph(files)
-
-            # Update the master dependency graph
-            self.module_dependencies.update(dep_graph)
-
-            # Reverse the graph so that it maps each module to the other modules that import it
-            self.reversed_graph = reverse_graph(self.module_dependencies)
+        # Reverse the graph so that it maps each module to the other modules that import it
+        self.reversed_graph = reverse_graph(self.module_dependencies)
 
     def _check_for_deleted_modules(self, update_actions: UpdateActions):
         """Check for deleted modules and add them to the terminate list in the apps dict. Part of self.check_app_updates sequence"""

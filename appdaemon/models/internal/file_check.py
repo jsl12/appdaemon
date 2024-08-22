@@ -40,26 +40,35 @@ class FileCheck(BaseModel):
     def there_were_changes(self) -> bool:
         return bool(self.new) or bool(self.modified) or bool(self.deleted)
 
-    def compare_to_previous(self, previous: Self):
+    def update(self, new_files: Iterable[Path]):
+        """Updates the internal new, modified, and deleted sets based on a new set of files"""
+
+        # Convert iterable to a set so that it's easier to check for belonging to it
+        new_files = new_files if isinstance(new_files, set) else set(new_files)
+
+        # Reset file sets
         self.new = set()
+        self.modified = set()
+        self.deleted = set()
 
-        for file, mtime in self.mtimes.items():
-            # new files
-            if file not in previous.mtimes:
-                self.new.add(file)
+        # Check for deleted files
+        currently_tracked_files = set(self.mtimes.keys())
+        for current_file in currently_tracked_files:
+            if current_file not in new_files:
+                self.deleted.add(current_file)
+                del self.mtimes[current_file]
 
-            # modified files
-            elif mtime > previous.mtimes[file]:
-                self.modified.add(file)
+        # Check new files to see if they're new or modified
+        for new_file in new_files:
+            new_mtime = new_file.stat().st_mtime
 
-            # unchanged files
+            if mtime := self.mtimes.get(new_file):
+                if new_mtime > mtime:
+                    self.modified.add(new_file)
             else:
-                pass
+                self.new.add(new_file)
 
-        # deleted files
-        for file in previous.paths:
-            if file not in self.mtimes:
-                self.deleted.add(file)
+            self.mtimes[new_file] = new_mtime
 
 
 class AppConfigFileCheck(FileCheck):
