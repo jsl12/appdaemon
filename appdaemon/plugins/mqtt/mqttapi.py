@@ -5,6 +5,8 @@ import appdaemon.utils as utils
 
 from typing import Callable, Union, Optional, Any
 
+from appdaemon.models.app_config import AppConfig
+
 
 class Mqtt(adbase.ADBase, adapi.ADAPI):
     """
@@ -48,16 +50,7 @@ class Mqtt(adbase.ADBase, adapi.ADAPI):
     The MQTT API also provides 3 convenience functions to make calling of specific functions easier an more readable. These are documented in the following section.
     """
 
-    def __init__(
-        self,
-        ad: AppDaemon,
-        name,
-        logging,
-        args,
-        config,
-        app_config,
-        global_vars,
-    ):
+    def __init__(self, ad: AppDaemon, config_model: AppConfig):
         """Constructor for the app.
 
         Args:
@@ -71,8 +64,8 @@ class Mqtt(adbase.ADBase, adapi.ADAPI):
 
         """
         # Call Super Classes
-        adbase.ADBase.__init__(self, ad, name, logging, args, config, app_config, global_vars)
-        adapi.ADAPI.__init__(self, ad, name, logging, args, config, app_config, global_vars)
+        adbase.ADBase.__init__(self, ad, config_model)
+        adapi.ADAPI.__init__(self, ad, config_model)
 
     #
     # Override listen_event()

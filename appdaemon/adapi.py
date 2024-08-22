@@ -57,7 +57,6 @@ class ADAPI:
 
         self.config = self.AD.config.model_dump(by_alias=True, exclude_unset=True)
         self.args = self.config_model.model_dump(by_alias=True, exclude_unset=True)
-        self.app_config = self.AD.app_management.app_config.model_dump(by_alias=True, exclude_unset=True)
 
         self.dashboard_dir = None
 
