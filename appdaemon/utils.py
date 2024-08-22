@@ -4,7 +4,6 @@ import copy
 import cProfile
 import datetime
 import functools
-import importlib
 import inspect
 import io
 import json
@@ -21,7 +20,6 @@ from collections.abc import Iterable
 from datetime import timedelta
 from functools import wraps
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, Callable, Dict
 
 import dateutil.parser
@@ -843,30 +841,6 @@ def read_yaml_config(file: Path) -> Dict[str, Dict]:
         return yaml.safe_load(yamlfd)
 
 
-def recursive_reload(module: ModuleType, reloaded: set = None):
-    """Recursive reload function that does a depth-first search through all sub-modules and reloads them in the correct order of dependence.
-
-    Adapted from https://gist.github.com/KristianHolsheimer/f139646259056c1dffbf79169f84c5de
-    """
-    reloaded = reloaded or set()
-
-    for attr_name in dir(module):
-        attr = getattr(module, attr_name)
-        check = (
-            # is it a module?
-            isinstance(attr, ModuleType)
-            # has it already been reloaded?
-            and attr.__name__ not in reloaded
-            # is it a proper submodule?
-            and attr.__name__.startswith(module.__name__)
-        )
-        if check:
-            recursive_reload(attr, reloaded)
-
-    importlib.reload(module)
-    reloaded.add(module.__name__)
-
-
 def count_positional_arguments(callable: Callable) -> int:
     return len(
         [
@@ -875,3 +849,12 @@ def count_positional_arguments(callable: Callable) -> int:
             if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD or p.kind == inspect.Parameter.VAR_POSITIONAL
         ]
     )
+
+
+class Singleton(type):
+    _instances = {}
+
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            cls._instances[cls] = super().__call__(*args, **kwargs)
+        return cls._instances[cls]

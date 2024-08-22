@@ -174,7 +174,7 @@ class LogSubscriptionHandler(StreamHandler):
             logger.warning("-" * 60)
 
 
-class Logging:
+class Logging(metaclass=utils.Singleton):
     """Creates and configures the Python logging. The top-level logger is called ``AppDaemon``. Child loggers are created with :meth:`~Logging.get_child`."""
 
     AD: "AppDaemon"
@@ -287,14 +287,14 @@ class Logging:
                 args["formatter"] = formatter
                 formatter.formatTime = self.get_time
                 logger = logging.getLogger(args["name"])
-                logger.addFilter(
-                    DuplicateFilter(
-                        logger,
-                        args["filter_threshold"],
-                        args["filter_repeat_delay"],
-                        args["filter_timeout"],
-                    )
-                )
+                # logger.addFilter(
+                #     DuplicateFilter(
+                #         logger,
+                #         args["filter_threshold"],
+                #         args["filter_repeat_delay"],
+                #         args["filter_timeout"],
+                #     )
+                # )
                 args["logger"] = logger
                 logger.setLevel(log_level)
                 logger.propagate = False
@@ -310,14 +310,14 @@ class Logging:
                     )
                 self.config[log]["handler"] = handler
                 handler.setFormatter(formatter)
-                logger.addFilter(
-                    DuplicateFilter(
-                        logger,
-                        args["filter_threshold"],
-                        args["filter_repeat_delay"],
-                        args["filter_timeout"],
-                    )
-                )
+                # logger.addFilter(
+                #     DuplicateFilter(
+                #         logger,
+                #         args["filter_threshold"],
+                #         args["filter_repeat_delay"],
+                #         args["filter_timeout"],
+                #     )
+                # )
                 logger.addHandler(handler)
 
         # Setup any aliases
@@ -450,14 +450,14 @@ class Logging:
             Logger: Child logger
         """
         logger = self.get_logger().getChild(name)
-        logger.addFilter(
-            DuplicateFilter(
-                logger,
-                self.config["main_log"]["filter_threshold"],
-                self.config["main_log"]["filter_repeat_delay"],
-                self.config["main_log"]["filter_timeout"],
-            )
-        )
+        # logger.addFilter(
+        #     DuplicateFilter(
+        #         logger,
+        #         self.config["main_log"]["filter_threshold"],
+        #         self.config["main_log"]["filter_repeat_delay"],
+        #         self.config["main_log"]["filter_timeout"],
+        #     )
+        # )
 
         if name in self.AD.module_debug:
             logger.setLevel(self.AD.module_debug[name])
