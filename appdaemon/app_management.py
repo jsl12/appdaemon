@@ -1,7 +1,6 @@
 import asyncio
 import copy
 import cProfile
-from functools import wraps
 import importlib
 import io
 import logging
@@ -14,12 +13,14 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import wraps
 from logging import Logger
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Union, Coroutine
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Union
 
 import appdaemon.utils as utils
+from appdaemon.models.internal.app_config import AppConfigFileCheck
 
 if TYPE_CHECKING:
     from appdaemon.appdaemon import AppDaemon
@@ -125,7 +126,9 @@ class AppManagement:
     apps_initialized: bool = False
     check_app_updates_profile_stats: str = ""
     check_updates_lock: asyncio.Lock = asyncio.Lock()
-    app_config_file_modified: int = 0
+    last_config_file_check: AppConfigFileCheck = AppConfigFileCheck()
+
+    app_config_files: Dict[Path, List[str]] = {}
 
     active_apps_sensor: str = "sensor.active_apps"
     inactive_apps_sensor: str = "sensor.inactive_apps"
@@ -143,7 +146,6 @@ class AppManagement:
         self.objects = {}
 
         # Initialize config file tracking
-        self.app_config_files = {}
         self.module_dirs = []
 
         # Keeps track of the name of the module and class to load for each app name
@@ -648,41 +650,20 @@ class AppManagement:
                 await self.AD.sequences.add_sequences(modified_sequences)
 
     # Run in executor
-    def check_later_app_configs(self, last_latest):
-        later_files = {}
-        app_config_files = []
-        later_files["files"] = []
-        later_files["latest"] = last_latest
-        later_files["deleted"] = []
-        for root, subdirs, files in os.walk(self.AD.app_dir):
-            subdirs[:] = [d for d in subdirs if d not in self.AD.exclude_dirs and "." not in d]
-            if utils.is_valid_root_path(root):
-                for file in files:
-                    if file[-5:] == self.ext and file[0] != ".":
-                        path = os.path.join(root, file)
-                        app_config_files.append(path)
-                        ts = os.path.getmtime(path)
-                        if ts > last_latest:
-                            later_files["files"].append(path)
-                        if ts > later_files["latest"]:
-                            later_files["latest"] = ts
+    def check_app_config_files(self, previous_config_files: AppConfigFileCheck) -> AppConfigFileCheck:
+        current_config_files = AppConfigFileCheck.from_iterable(self.get_config_files())
+        current_config_files.compare_to_previous(previous_config_files)
 
-        for file in self.app_config_files:
-            if file not in app_config_files:
-                later_files["deleted"].append(file)
-
+        # adjust self.app_config_files based on current situation
         if self.app_config_files != {}:
-            for file in app_config_files:
-                if file not in self.app_config_files:
-                    later_files["files"].append(file)
+            # new files
+            for path in current_config_files.new:
+                self.app_config_files[path] = []
+            # deleted files
+            for path in current_config_files.deleted:
+                del self.app_config_files[path]
 
-                    self.app_config_files[file] = []
-
-        # now remove the unused files from the files
-        for file in later_files["deleted"]:
-            del self.app_config_files[file]
-
-        return later_files
+        return current_config_files
 
     # Run in executor
     def read_config_file(self, file: Path) -> Dict[str, Dict]:
@@ -713,24 +694,26 @@ class AppManagement:
         total_apps = len(self.app_config)
 
         try:
-            latest = await utils.run_in_executor(self, self.check_later_app_configs, self.app_config_file_modified)
-            self.app_config_file_modified = latest["latest"]
+            self.last_config_file_check = await utils.run_in_executor(
+                self, self.check_app_config_files, self.last_config_file_check
+            )
 
-            if latest["files"] or latest["deleted"]:
+            if self.last_config_file_check.there_were_changes:
                 if silent is False:
                     self.logger.info("Reading config")
+
                 new_config = await self.read_config()
+
                 if new_config is None:
                     if silent is False:
                         self.logger.warning("New config not applied")
                     return
 
-                for file in latest["deleted"]:
-                    if silent is False:
+                if silent is False:
+                    for file in self.last_config_file_check.deleted:
                         self.logger.info("%s deleted", file)
-
-                for file in latest["files"]:
-                    if silent is False:
+                    new_or_modified = self.last_config_file_check.new or self.last_config_file_check.modified
+                    for file in new_or_modified:
                         self.logger.info("%s added or modified", file)
 
                 # Check for changes
@@ -1095,12 +1078,22 @@ class AppManagement:
             self.add_to_import_path(path)
 
     def get_python_files(self) -> Iterable[Path]:
-        """Iterates through *.py in the app directory. Excludes directory names defined in exclude_dirs and with a "." character. Excludes files that aren't readable."""
+        """Iterates through *.py in the app directory. Excludes directory names defined in exclude_dirs and with a "." character. Also excludes files that aren't readable."""
         return (
             f
             for f in Path(self.AD.app_dir).resolve().rglob("*.py")
             if f.parent.name not in self.AD.exclude_dirs  # apply exclude_dirs
             and "." not in f.parent.name  # also excludes *.egg-info folders
+            and os.access(f, os.R_OK)  # skip unreadable files
+        )
+
+    def get_config_files(self) -> Iterable[Path]:
+        """Iterates through config files in the config directory. Excludes directory names defined in exclude_dirs and files with a "." character. Also excludes files that aren't readable."""
+        return (
+            f
+            for f in Path(self.AD.config_dir).resolve().rglob(f"*{self.ext}")
+            if f.parent.name not in self.AD.exclude_dirs  # apply exclude_dirs
+            and "." not in f.stem
             and os.access(f, os.R_OK)  # skip unreadable files
         )
 

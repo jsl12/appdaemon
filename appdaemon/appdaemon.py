@@ -141,7 +141,7 @@ class AppDaemon:
             assert self.config_dir is not None, "Config_dir not set. This is a development problem"
             assert self.config_dir.exists(), f"{self.config_dir} does not exist"
             assert os.access(
-                self.config_dir, os.R_OK | os.W_OK | os.X_OK
+                self.config_dir, os.R_OK | os.X_OK
             ), f"{self.config_dir} does not have the right permissions"
 
             # this will always be None because it never gets set in ad_kwargs in __main__.py
