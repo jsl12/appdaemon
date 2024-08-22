@@ -1,14 +1,13 @@
-from pathlib import Path
 import threading
-from functools import wraps
 from copy import deepcopy
+from functools import wraps
+from pathlib import Path
+from typing import Callable
 
-import appdaemon.utils as utils
 import appdaemon.adapi as adapi
+import appdaemon.utils as utils
 from appdaemon.appdaemon import AppDaemon
 from appdaemon.logging import Logging
-
-from typing import Callable
 
 
 class Entities:  # @todo
@@ -126,7 +125,7 @@ class ADBase:
 
         return api
 
-    @utils.sync_wrapper
+    @utils.sync_decorator
     async def get_plugin_api(self, plugin_name: str) -> Callable:
         return await self.AD.plugins.get_plugin_api(
             plugin_name,

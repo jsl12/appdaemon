@@ -1012,9 +1012,9 @@ class HTTP:
             self.access.debug("Web Call to %s for %s", route, name)
 
             try:
-                f = asyncio.create_task(callback(request, rargs))
-                self.AD.futures.add_future(name, f)
-                return await f
+                task = asyncio.create_task(callback(request, rargs))
+                self.AD.futures.add_future(name, task)
+                return await task
             except asyncio.CancelledError:
                 code = 504
                 error = "Request was Cancelled"

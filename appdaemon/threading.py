@@ -150,7 +150,7 @@ class Threading:
             self.total_threads = kwargs["total_threads"]
             self.auto_pin = False
         else:
-            apps = await self.AD.app_management.check_config(True, False)
+            apps = await self.AD.app_management.check_config(silent=True, add_threads=False)
             self.total_threads = apps.active
 
         if self.pin_apps is True:
@@ -871,8 +871,8 @@ class Threading:
             # And Q
             #
             if asyncio.iscoroutinefunction(myargs["function"]):
-                f = asyncio.ensure_future(self.async_worker(myargs))
-                self.AD.futures.add_future(name, f)
+                future = asyncio.ensure_future(self.async_worker(myargs))
+                self.AD.futures.add_future(name, future)
             else:
                 self.select_q(myargs)
             return True

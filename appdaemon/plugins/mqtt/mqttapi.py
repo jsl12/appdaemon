@@ -78,7 +78,7 @@ class Mqtt(adbase.ADBase, adapi.ADAPI):
     # Override listen_event()
     #
 
-    @utils.sync_wrapper
+    @utils.sync_decorator
     async def listen_event(self, callback: Callable, event: str = None, **kwargs: Optional[Any]) -> str:
         """Listens for changes within the MQTT plugin.
 
@@ -321,7 +321,7 @@ class Mqtt(adbase.ADBase, adapi.ADAPI):
 
         self._run_service_call("unsubscribe", topic, **kwargs)
 
-    @utils.sync_wrapper
+    @utils.sync_decorator
     async def is_client_connected(self, **kwargs: Optional[Any]) -> bool:
         """Returns ``TRUE`` if the MQTT plugin is connected to its broker, ``FALSE`` otherwise.
 

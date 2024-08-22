@@ -21,13 +21,14 @@ from datetime import timedelta
 from functools import wraps
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Dict
+from typing import Any, Dict
 
 import dateutil.parser
 import tomli
 import tomli_w
 import yaml
 
+from appdaemon.futures import Futures
 from appdaemon.version import __version__  # noqa: F401
 
 # Comment
@@ -216,32 +217,22 @@ def check_state(logger, new_state, callback_state, name) -> bool:
     return passed
 
 
-def sync_wrapper(coro) -> Callable:
-    @wraps(coro)
-    def inner_sync_wrapper(self, *args, **kwargs):
-        is_async = None
-        try:
-            # do this first to get the exception
-            # otherwise the coro could be started and never awaited
-            asyncio.get_event_loop()
-            is_async = True
-        except RuntimeError:
-            is_async = False
-
-        if is_async is True:
-            # don't use create_task. It's python3.7 only
-            f = asyncio.ensure_future(coro(self, *args, **kwargs))
-            self.AD.futures.add_future(self.name, f)
+def sync_decorator(func):  # no type hints here, so that @wraps(func) works properly
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        if inspect.iscoroutinefunction(func):
+            task = asyncio.create_task(func(self, *args, **kwargs))
+            futures: Futures = self.AD.futures
+            futures.add_future(self.name, task)
+            return task
         else:
-            f = run_coroutine_threadsafe(self, coro(self, *args, **kwargs))
+            return run_coroutine_threadsafe(self, func(self, *args, **kwargs))
 
-        return f
-
-    return inner_sync_wrapper
+    return wrapper
 
 
 def _timeit(func):
-    @functools.wraps(func)
+    @wraps(func)
     def newfunc(*args, **kwargs):
         self = args[0]
         start_time = time.time()
