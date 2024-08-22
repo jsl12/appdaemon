@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import cProfile
+from functools import wraps
 import importlib
 import io
 import logging
@@ -16,7 +17,7 @@ from enum import Enum
 from logging import Logger
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Union, Coroutine
 
 import appdaemon.utils as utils
 
@@ -92,9 +93,6 @@ class AppManagement:
     AD: "AppDaemon"
     """Reference to the top-level AppDaemon container object
     """
-    use_toml: bool
-    """Whether to use TOML files for configuration
-    """
     ext: Literal[".yaml", ".toml"]
     logger: Logger
     """Standard python logger named ``AppDaemon._app_management``
@@ -124,11 +122,18 @@ class AppManagement:
     active_apps: List[str]
     inactive_apps: List[str]
     non_apps: List[str]
+    apps_initialized: bool = False
+    check_app_updates_profile_stats: str = ""
+    check_updates_lock: asyncio.Lock = asyncio.Lock()
+    app_config_file_modified: int = 0
 
-    def __init__(self, ad: "AppDaemon", use_toml: bool):
+    active_apps_sensor: str = "sensor.active_apps"
+    inactive_apps_sensor: str = "sensor.inactive_apps"
+    total_apps_sensor: str = "sensor.total_apps"
+
+    def __init__(self, ad: "AppDaemon"):
         self.AD = ad
-        self.use_toml = use_toml
-        self.ext = ".toml" if use_toml is True else ".yaml"
+        self.ext = self.AD.config.ext
         self.logger = ad.logging.get_child("_app_management")
         self.error = ad.logging.get_error()
         self.diag = ad.logging.get_diag()
@@ -136,12 +141,8 @@ class AppManagement:
         self.filter_files = {}
         self.modules = {}
         self.objects = {}
-        self.check_app_updates_profile_stats = None
-        self.check_updates_lock = None
 
         # Initialize config file tracking
-
-        self.app_config_file_modified = 0
         self.app_config_files = {}
         self.module_dirs = []
 
@@ -149,15 +150,7 @@ class AppManagement:
         self.app_config = {}
         self.global_module_dependencies = {}
 
-        self.apps_initialized = False
-
-        # first declare sensors
-        self.active_apps_sensor = "sensor.active_apps"
-        self.inactive_apps_sensor = "sensor.inactive_apps"
-        self.total_apps_sensor = "sensor.total_apps"
-
         # Add Path for adbase
-
         sys.path.insert(0, os.path.dirname(__file__))
 
         #
@@ -176,6 +169,9 @@ class AppManagement:
         self.active_apps = []
         self.inactive_apps = []
         self.non_apps = ["global_modules", "sequence"]
+
+        if self.AD.check_app_updates_profile:
+            self.check_app_updates = self.profiler_decorator(self.check_app_updates)
 
     async def set_state(self, name, **kwargs):
         # not a fully qualified entity name
@@ -208,9 +204,6 @@ class AppManagement:
         await self.AD.state.remove_entity("admin", "app.{}".format(name))
 
     async def init_admin_stats(self):
-        # store lock
-        self.check_updates_lock = asyncio.Lock()
-
         # create sensors
         await self.add_entity(self.active_apps_sensor, 0, {"friendly_name": "Active Apps"})
         await self.add_entity(self.inactive_apps_sensor, 0, {"friendly_name": "Inactive Apps"})
@@ -950,47 +943,35 @@ class AppManagement:
 
     # Run in executor
     def process_filters(self):
-        if "filters" in self.AD.config:
-            for filter in self.AD.config["filters"]:
-                for root, subdirs, files in os.walk(self.AD.app_dir, topdown=True):
-                    # print(root, subdirs, files)
-                    #
-                    # Prune dir list
-                    #
-                    subdirs[:] = [d for d in subdirs if d not in self.AD.exclude_dirs and "." not in d]
+        for filter in self.AD.config.filters:
+            input_files = self.AD.app_dir.rglob(f"*{filter.input_ext}")
+            for file in input_files:
+                modified = file.stat().st_mtime
 
-                    ext = filter["input_ext"]
-                    extlen = len(ext) * -1
+                if file in self.filter_files:
+                    if self.filter_files[file] < modified:
+                        self.logger.info("Found modified filter file %s", file)
+                        run = True
+                else:
+                    self.logger.info("Found new filter file %s", file)
+                    run = True
 
-                    for file in files:
-                        run = False
-                        if file[extlen:] == ext:
-                            infile = os.path.join(root, file)
-                            modified = os.path.getmtime(infile)
-                            if infile in self.filter_files:
-                                if self.filter_files[infile] < modified:
-                                    run = True
-                            else:
-                                self.logger.info("Found new filter file %s", infile)
-                                run = True
+                if run is True:
+                    self.logger.info("Running filter on %s", file)
+                    self.filter_files[file] = modified
 
-                            if run is True:
-                                self.logger.info("Running filter on %s", infile)
-                                self.filter_files[infile] = modified
-
-                                # Run the filter
-
-                                outfile = utils.rreplace(infile, ext, filter["output_ext"], 1)
-                                command_line = filter["command_line"].replace("$1", infile)
-                                command_line = command_line.replace("$2", outfile)
-                                try:
-                                    subprocess.Popen(command_line, shell=True)
-                                except Exception:
-                                    self.logger.warning("-" * 60)
-                                    self.logger.warning("Unexpected running filter on: %s:", infile)
-                                    self.logger.warning("-" * 60)
-                                    self.logger.warning(traceback.format_exc())
-                                    self.logger.warning("-" * 60)
+                    # Run the filter
+                    outfile = utils.rreplace(file, filter.input_ext, filter.output_ext, 1)
+                    command_line = filter.command_line.replace("$1", file)
+                    command_line = command_line.replace("$2", outfile)
+                    try:
+                        subprocess.Popen(command_line, shell=True)
+                    except Exception:
+                        self.logger.warning("-" * 60)
+                        self.logger.warning("Unexpected running filter on: %s:", file)
+                        self.logger.warning("-" * 60)
+                        self.logger.warning(traceback.format_exc())
+                        self.logger.warning("-" * 60)
 
     @staticmethod
     def check_file(file: str):
@@ -1002,6 +983,24 @@ class AppManagement:
         self.logger.info("Adding directory to import path: %s", path)
         sys.path.insert(0, path)
         self.module_dirs.append(path)
+
+    def profiler_decorator(self, func: Coroutine):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            pr = cProfile.Profile()
+            pr.enable()
+
+            try:
+                return await func(*args, **kwargs)
+            finally:
+                pr.disable()
+                s = io.StringIO()
+                sortby = "cumulative"
+                ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+                ps.print_stats()
+                self.check_app_updates_profile_stats = s.getvalue()
+
+        return wrapper
 
     # @_timeit
     async def check_app_updates(self, plugin: str = None, mode: UpdateMode = UpdateMode.NORMAL):  # noqa: C901
@@ -1022,16 +1021,10 @@ class AppManagement:
             - Loads or reloads modules/pacakges as necessary
             - Loads apps from the modules/packages
         """
+        if not self.AD.apps:
+            return
+
         async with self.check_updates_lock:
-            if self.AD.apps is False:
-                return
-
-            # Lets add some profiling
-            pr = None
-            if self.AD.check_app_updates_profile is True:
-                pr = cProfile.Profile()
-                pr.enable()
-
             # Process filters
             await utils.run_in_executor(self, self.process_filters)
 
@@ -1039,7 +1032,7 @@ class AppManagement:
                 await utils.run_in_executor(self, self._process_import_paths)
 
             modules: List[ModuleLoad] = []
-            await self._refresh_monitored_files(modules)
+            await utils.run_in_executor(self, self._refresh_monitored_files, modules)
 
             # Refresh app config
             apps = await self.check_config()
@@ -1058,15 +1051,6 @@ class AppManagement:
                 self.logger.info(f"Loaded modules: {list(self.modules.values())}")
 
             await self._load_apps(mode, apps, apps_terminated)
-
-            if self.AD.check_app_updates_profile is True:
-                pr.disable()
-
-            s = io.StringIO()
-            sortby = "cumulative"
-            ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
-            ps.print_stats()
-            self.check_app_updates_profile_stats = s.getvalue()
 
             self.apps_initialized = True
 
@@ -1090,7 +1074,7 @@ class AppManagement:
         }
 
         # Combine import directories. Having the list sorted will prioritize parent folders over children during import
-        import_dirs = sorted(module_parents | package_parents)
+        import_dirs = sorted(module_parents | package_parents, reverse=True)
 
         for path in import_dirs:
             self.add_to_import_path(path)
@@ -1127,7 +1111,7 @@ class AppManagement:
         module_path = Path(module_obj.__file__)
         return module_path
 
-    async def _refresh_monitored_files(self, modules: List[ModuleLoad]):
+    def _refresh_monitored_files(self, modules: List[ModuleLoad]):
         """Refreshes the modified times of the monitored files. Part of self.check_app_updates sequence"""
         for file in self.get_python_files():
             modified = file.stat().st_mtime
@@ -1136,13 +1120,13 @@ class AppManagement:
             if file in self.monitored_files:
                 # if the monitored file has been modified
                 if self.monitored_files[file] < modified:
+                    reload = True
                     # update the modified time
                     self.monitored_files[file] = modified
-                    # if the file is associated with a package
+                    # if the file is associated with a package, load that package instead
                     if file in self.mod_pkg_map:
-                        modules.append(ModuleLoad(path=self.module_path_from_file(file), reload=True))
-                    else:
-                        modules.append(ModuleLoad(path=file, reload=True))
+                        file = self.module_path_from_file(file)
+                    modules.append(ModuleLoad(path=file, reload=reload))
             else:
                 # start monitoring
                 self.monitored_files[file] = modified
@@ -1155,6 +1139,7 @@ class AppManagement:
                     pkg_name: str = self.mod_pkg_map[file]
                     names = [mod.name for mod in modules]
                     if pkg_name not in names:
+                        self.logger.info("Found package %s", pkg_name)
                         modules.append(ModuleLoad(path=pkg_name, reload=False))
 
     async def _check_for_deleted_modules(self, mode: UpdateMode, apps: AppActions):

@@ -153,7 +153,7 @@ class AppDaemon:
                     self.app_dir, os.R_OK | os.W_OK | os.X_OK
                 ), f"{self.app_dir} does not have the right permissions"
 
-            self.app_management = AppManagement(self, self.use_toml)
+            self.app_management = AppManagement(self)
             self.threading = Threading(self, kwargs)
 
             # Create ThreadAsync loop

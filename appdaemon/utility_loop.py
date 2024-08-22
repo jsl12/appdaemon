@@ -25,6 +25,7 @@ class Utility:
 
     stopping: bool
     logger: Logger
+    stopping: bool = False
 
     def __init__(self, ad: "AppDaemon"):
         """Constructor.
@@ -34,7 +35,6 @@ class Utility:
         """
 
         self.AD = ad
-        self.stopping = False
         self.logger = ad.logging.get_child("_utility")
         self.booted = None
         # self.AD.loop.create_task(self.loop())
@@ -225,7 +225,7 @@ class Utility:
                         check_app_updates_duration,
                         loop_duration - check_app_updates_duration,
                     )
-                    if self.AD.check_app_updates_profile is True:
+                    if self.AD.check_app_updates_profile:
                         self.logger.info("Profile information for Utility Loop")
                         self.logger.info(self.AD.app_management.check_app_updates_profile_stats)
 

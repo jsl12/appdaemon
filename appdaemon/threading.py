@@ -11,7 +11,7 @@ from logging import Logger
 from queue import Queue
 from random import randint
 from threading import Thread
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Union
 
 import iso8601
 
@@ -36,13 +36,18 @@ class Threading:
     thread_count: int
     threads: Dict[str, Dict[str, Union[Thread, Queue]]]
     """Dictionary with keys of the thread ID (string beginning with `thread-`) and values of another dictionary with `thread` and `queue` keys that have values of :class:`~threading.Thread` and :class:`~queue.Queue` objects respectively."""
-    auto_pin: bool
-    pin_threads: int
-    total_threads: int
-    pin_apps: Optional[bool]
-    next_thread: Optional[int]
-    last_stats_time: datetime.datetime
+
+    last_stats_time: datetime.datetime = datetime.datetime.fromtimestamp(0)
     callback_list: List[Dict]
+
+    pin_apps: bool
+    auto_pin: bool = True
+    pin_threads: int = 0
+    total_threads: int = 0
+
+    next_thread: int = 0
+    current_callbacks_executed: int = 0
+    current_callbacks_fired: int = 0
 
     def __init__(self, ad: "AppDaemon", kwargs):
         self.AD = ad
@@ -55,24 +60,13 @@ class Threading:
         self.threads = {}
 
         # A few shortcuts
-
         self.add_entity = ad.state.add_entity
         self.get_state = ad.state.get_state
         self.set_state = ad.state.set_state
         self.add_to_state = ad.state.add_to_state
         self.add_to_attr = ad.state.add_to_attr
 
-        self.auto_pin = True
-        self.pin_threads = 0
-        self.total_threads = 0
-        self.pin_apps = None
-        self.next_thread = None
-        # Setup stats
-
-        self.current_callbacks_executed = 0
-        self.current_callbacks_fired = 0
-
-        self.last_stats_time = datetime.datetime(1970, 1, 1, 0, 0, 0, 0)
+        self.pin_apps = kwargs.get("pin_apps", True)
         self.callback_list = []
 
     async def get_q_update(self):
@@ -158,9 +152,6 @@ class Threading:
         else:
             apps = await self.AD.app_management.check_config(True, False)
             self.total_threads = apps.active
-
-        self.pin_apps = True
-        utils.process_arg(self, "pin_apps", kwargs)
 
         if self.pin_apps is True:
             self.pin_threads = self.total_threads

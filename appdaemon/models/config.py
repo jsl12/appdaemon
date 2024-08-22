@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import pytz
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -13,6 +13,12 @@ class PluginConfig(BaseModel):
     type: str
 
 
+class FilterConfig(BaseModel):
+    command_line: str
+    input_ext: str
+    output_ext: str
+
+
 class AppDaemonConfig(BaseModel):
     latitude: float
     longitude: float
@@ -22,12 +28,13 @@ class AppDaemonConfig(BaseModel):
 
     config_dir: Path
     config_file: Path
-    app_dir: Optional[Path] = "./apps"
+    app_dir: Path = "./apps"
 
     use_toml: bool = False
+    ext: Literal[".yaml", ".toml"] = ".yaml"
 
     module_debug: Dict = {}
-    filters: Dict = {}
+    filters: List[FilterConfig] = []
 
     starttime: Optional[datetime] = None
     endtime: Optional[datetime] = None
@@ -93,3 +100,5 @@ class AppDaemonConfig(BaseModel):
         # Resolve app_dir relative to config_dir if it's a relative path
         if not self.app_dir.is_absolute():
             self.app_dir = self.config_dir / self.app_dir
+
+        self.ext = ".toml" if self.use_toml else ".yaml"
