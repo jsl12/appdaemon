@@ -16,7 +16,7 @@ from enum import Enum
 from functools import reduce, wraps
 from logging import Logger
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Set, Union, Self
 
 import appdaemon.utils as utils
 from appdaemon.dependency import (
@@ -210,25 +210,6 @@ class AppManagement:
 
         if self.AD.check_app_updates_profile:
             self.check_app_updates = self.profiler_decorator(self.check_app_updates)
-
-    # @staticmethod
-    # def warning_decorator(func):
-    #     @wraps(func)
-    #     def wrapper(self: Self, *args, **kwargs):
-    #         logger: Logger = self.logger
-    #         try:
-    #             return func(self, *args, **kwargs)
-    #         except (AppClassNotFound, AppClassSignatureError, AppInstantiationError, PinOutofRange) as e:
-    #             self.logger.warning(f'{type(e).__name__}: {e}')
-    #         except ModuleNotFoundError as e:
-    #             self.logger.warning(f"{type(e).__name__}: {e} for app ''")
-    #         except Exception:
-    #             logger.warning("-" * 60)
-    #             logger.warning("Unexpected error running %s", func.__qualname__)
-    #             logger.warning("-" * 60)
-    #             logger.warning(traceback.format_exc())
-    #             logger.warning("-" * 60)
-    #     return wrapper
 
     # @warning_decorator
     async def set_state(self, name: str, **kwargs):
@@ -563,15 +544,26 @@ class AppManagement:
         return True
 
     async def read_all(self, config_files: Iterable[Path]) -> AllAppConfig:
-        async def read_wrapper():
+        async def config_model_factory():
             """Creates a generator that sets the config_path of app configs"""
             for path in config_files:
-                raw_cfg = await self.read_config_file(path)
-                config_model = AllAppConfig.model_validate(raw_cfg)
-                for cfg in config_model.root.values():
-                    if isinstance(cfg, AppConfig):
-                        cfg.config_path = path
-                yield config_model
+                rel_path = path.relative_to(self.AD.app_dir.parent)
+
+                @utils.warning_decorator(
+                    start_text=f"{rel_path} read start",
+                    success_text=f"{rel_path} read success",
+                    error_text=f"Unexepected error while reading {rel_path}",
+                    finally_text=f"{rel_path} read finish",
+                )
+                async def safe_read(self: Self, path: Path):
+                    raw_cfg = await self.read_config_file(path)
+                    config_model = AllAppConfig.model_validate(raw_cfg)
+                    for cfg in config_model.root.values():
+                        if isinstance(cfg, AppConfig):
+                            cfg.config_path = path
+                    return config_model
+
+                yield await safe_read(self, path)
 
         def update(d1: Dict, d2: Dict) -> Dict:
             """Internal funciton to log warnings if an app's name gets repeated."""
@@ -579,7 +571,7 @@ class AppManagement:
                 self.logger.warning(f"Apps re-defined: {overlap}")
             return d1.update(d2) or d1
 
-        models = [m.model_dump(by_alias=True, exclude_unset=True) async for m in read_wrapper()]
+        models = [m.model_dump(by_alias=True, exclude_unset=True) async for m in config_model_factory()]
         combined_configs = reduce(update, models, {})
         return AllAppConfig.model_validate(combined_configs)
 
@@ -735,17 +727,11 @@ class AppManagement:
 
     @utils.executor_decorator
     def read_config_file(self, file: Path) -> Dict[str, Dict]:
-        """Reads a single YAML or TOML file."""
-        file = Path(file) if not isinstance(file, Path) else file
-        self.logger.debug("Reading %s", file)
-        try:
-            return utils.read_config_file(file)
-        except Exception:
-            self.logger.warning("-" * 60)
-            self.logger.warning("Unexpected error loading config file: %s", file)
-            self.logger.warning("-" * 60)
-            self.logger.warning(traceback.format_exc())
-            self.logger.warning("-" * 60)
+        """Reads a single YAML or TOML file.
+
+        This has to exist as a method of AppManagement for the decorator, which makes it run in the executor, to work properly. It needs access to a `self` argument, that it uses to get the asyncio event loop and executor.
+        """
+        return utils.read_config_file(file)
 
     # noinspection PyBroadException
     async def check_config(self, silent: bool = False, add_threads: bool = True) -> Optional[AppActions]:  # noqa: C901
@@ -1209,6 +1195,7 @@ class AppManagement:
 
     async def _create_apps(self, load_order: List[str]):
         for app_name in load_order:
+            # Set the cfg variable which can be used for later checks too
             if not (cfg := self.app_config.root.get(app_name)):
                 self.logger.warning(f"Dependency not found: {app_name}")
                 continue

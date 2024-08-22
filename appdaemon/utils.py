@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from datetime import timedelta
 from functools import wraps
 from pathlib import Path
+import traceback
 from types import ModuleType
 from typing import Any, Dict, Type, TYPE_CHECKING
 
@@ -304,10 +305,52 @@ def executor_decorator(func):
     async def wrapper(self, *args, **kwargs):
         ad: "AppDaemon" = self.AD
         preloaded_function = functools.partial(func, self, *args, **kwargs)
+        ad.threading.logger.debug(f"Running {func.__qualname__} in the {type(ad.executor).__name__}")
+        # self.logger.debug(f"Running {func.__qualname__} in the {type(ad.executor).__name__}")
         future = ad.loop.run_in_executor(executor=ad.executor, func=preloaded_function)
         return await future
 
     return wrapper
+
+
+def warning_decorator(
+    start_text: str = None, success_text: str = None, error_text: str = None, finally_text: str = None
+):
+    """Creates a decorator for a function that logs custom text before and after."""
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            try:
+                nonlocal start_text
+                if start_text is not None:
+                    self.logger.debug(start_text)
+
+                result = func(self, *args, **kwargs)
+
+            except Exception:
+                ad: "AppDaemon" = self.ad
+                error_logger = ad.logging.get_error().getChild(self.name)
+                error_logger.warning("-" * 60)
+                nonlocal error_text
+                error_text = error_text or f"Unexpected error running {func.__qualname__}"
+                error_logger.warning(error_text)
+                error_logger.warning("-" * 60)
+                error_logger.warning(traceback.format_exc())
+                error_logger.warning("-" * 60)
+
+            else:
+                if success_text:
+                    self.logger.debug(success_text)
+                return result
+            finally:
+                nonlocal finally_text
+                if finally_text:
+                    self.logger.debug(finally_text)
+
+        return wrapper
+
+    return decorator
 
 
 async def run_in_executor(self, fn, *args, **kwargs) -> Any:
@@ -612,6 +655,7 @@ def write_toml_config(path, **kwargs):
 
 
 def read_config_file(file: Path) -> Dict[str, Dict]:
+    # raise ValueError
     """Reads a single YAML or TOML file."""
     file = Path(file) if not isinstance(file, Path) else file
     if file.suffix == ".yaml":
