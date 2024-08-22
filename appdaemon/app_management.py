@@ -52,13 +52,13 @@ class UpdateMode(Enum):
 
 @dataclass
 class LoadingActions:
-    new: Set[str] = field(init=False, default_factory=set)
-    modified: Set[str] = field(init=False, default_factory=set)
-    deleted: Set[str] = field(init=False, default_factory=set)
+    init: Set[str] = field(default_factory=set)
+    reload: Set[str] = field(default_factory=set)
+    term: Set[str] = field(default_factory=set)
 
     def init_sort(self, graph: Dict[str, Set[str]]):
         rev_graph = reverse_graph(graph)
-        to_load = self.new | self.modified
+        to_load = self.init | self.reload
         to_load |= find_all_dependents(to_load, rev_graph)
         sub_graph = {n: graph[n] for n in to_load}
         init_order = [n for n in topo_sort(sub_graph) if n in to_load]
@@ -66,7 +66,7 @@ class LoadingActions:
 
     def term_sort(self, graph: Dict[str, Set[str]]):
         rev_graph = reverse_graph(graph)
-        to_term = self.modified | self.deleted
+        to_term = self.reload | self.term
         to_term |= find_all_dependents(to_term, rev_graph)
         sub_graph = {n: graph[n] for n in to_term}
         term_order = [n for n in topo_sort(sub_graph) if n in to_term]
@@ -1005,12 +1005,15 @@ class AppManagement:
 
             # Refresh app config
             app_actions = await self.check_config()
-            update_actions.apps.new |= app_actions.apps_to_initialize
-            update_actions.apps.deleted |= app_actions.apps_to_terminate
+            update_actions.apps.init |= app_actions.apps_to_initialize
+            update_actions.apps.term |= app_actions.apps_to_terminate
 
-            self._add_reload_apps(update_actions)
-
-            # await self._check_for_deleted_modules(mode, app_actions)
+            if mode == UpdateMode.TERMINATE:
+                update_actions.apps = LoadingActions(term=self.app_config.app_names())
+                update_actions.modules = LoadingActions()
+            else:
+                self._add_reload_apps(update_actions)
+                self._check_for_deleted_modules(update_actions)
 
             await self._restart_plugin(plugin, app_actions)
 
@@ -1100,13 +1103,13 @@ class AppManagement:
 
         if new := self.mtimes_python.new:
             self.logger.info("New Python files: %s", len(new))
-            update_actions.modules.new = set(map(get_full_module_name, new))
+            update_actions.modules.init = set(map(get_full_module_name, new))
         if mod := self.mtimes_python.modified:
             self.logger.info("Modified Python files: %s", len(mod))
-            update_actions.modules.modified = set(map(get_full_module_name, mod))
+            update_actions.modules.reload = set(map(get_full_module_name, mod))
         if deleted := self.mtimes_python.deleted:
             self.logger.info("Deleted Python files: %s", len(deleted))
-            update_actions.modules.deleted = set(map(get_full_module_name, deleted))
+            update_actions.modules.term = set(map(get_full_module_name, deleted))
 
         if files := (self.mtimes_python.new | self.mtimes_python.modified):
             self._update_dep_graph(files)
@@ -1154,20 +1157,35 @@ class AppManagement:
             # Reverse the graph so that it maps each module to the other modules that import it
             self.reversed_graph = reverse_graph(self.module_dependencies)
 
-    async def _check_for_deleted_modules(self, mode: UpdateMode, apps: AppActions):
+    def _check_for_deleted_modules(self, update_actions: UpdateActions):
         """Check for deleted modules and add them to the terminate list in the apps dict. Part of self.check_app_updates sequence"""
-        deleted_modules = []
 
-        for file in list(self.monitored_files.keys()):
-            if not Path(file).exists() or mode == UpdateMode.TERMINATE:
-                self.logger.info("Removing module %s", file)
-                del self.monitored_files[file]
-                for app in self.apps_per_module(self.get_module_from_path(file)):
-                    apps.apps_to_terminate.add(app)
+        deleted_module_names = set(map(get_full_module_name, self.mtimes_python.deleted))
+        deleted_module_names |= find_all_dependents(deleted_module_names, self.reversed_graph)
 
-                deleted_modules.append(file)
+        to_delete = set(
+            app_name
+            for app_name, cfg in self.app_config.root.items()
+            if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in deleted_module_names
+        )
+        if to_delete:
+            self.logger.debug(f"Removing apps because of deleted Python files: {to_delete}")
+            update_actions.apps.term |= to_delete
 
-        return deleted_modules
+        # affected_module_names = set(load_order) | deleted_module_names | deleted_dependants
+
+        # deleted_modules = []
+
+        # for file in list(self.monitored_files.keys()):
+        #     if not Path(file).exists() or mode == UpdateMode.TERMINATE:
+        #         self.logger.info("Removing module %s", file)
+        #         del self.monitored_files[file]
+        #         for app in self.apps_per_module(self.get_module_from_path(file)):
+        #             apps.apps_to_terminate.add(app)
+
+        #         deleted_modules.append(file)
+
+        # return deleted_modules
 
     def _add_reload_apps(self, update_actions: UpdateActions):
         """Determines which apps are going to be affected by the modules that will be (re)loaded.
@@ -1175,17 +1193,13 @@ class AppManagement:
         Part of self.check_app_updates sequence
         """
         module_load_order = update_actions.modules.init_sort(self.module_dependencies)
-        update_actions.apps.modified = set(
+        update_actions.apps.reload = set(
             app_name
             for app_name, cfg in self.app_config.root.items()
             if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in module_load_order
         )
 
-        # deleted_module_names = set(map(get_full_module_name, self.mtimes_python.deleted))
-        # deleted_dependants = find_all_dependents(deleted_module_names, self.reversed_graph)
-        # affected_module_names = set(load_order) | deleted_module_names | deleted_dependants
-
-        if load_apps := (update_actions.apps.new | update_actions.apps.modified):
+        if load_apps := (update_actions.apps.init | update_actions.apps.reload):
             self.logger.debug("Apps to be loaded: %s", load_apps)
 
     async def _restart_plugin(self, plugin, apps: AppActions):
@@ -1238,8 +1252,8 @@ class AppManagement:
 
         if failed_to_stop:
             self.logger.debug("Removing %s apps because they failed to stop cleanly", len(failed_to_stop))
-            update_actions.apps.new -= failed_to_stop
-            update_actions.apps.modified -= failed_to_stop
+            update_actions.apps.init -= failed_to_stop
+            update_actions.apps.reload -= failed_to_stop
 
     async def _start_apps(self, update_actions: UpdateActions):
         # dep_graph = self.app_config.reversed_dependency_graph()

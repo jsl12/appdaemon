@@ -117,6 +117,9 @@ class AllAppConfig(RootModel):
     def app_definitions(self) -> List[Tuple[str, AppConfig]]:
         return [(app_name, cfg) for app_name, cfg in self.root.items() if isinstance(cfg, AppConfig)]
 
+    def app_names(self) -> Set[str]:
+        return set(app_name for app_name, cfg in self.root.items() if isinstance(cfg, AppConfig))
+
     @property
     def app_count(self) -> int:
         return len([cfg for cfg in self.root.values() if isinstance(cfg, AppConfig)])
