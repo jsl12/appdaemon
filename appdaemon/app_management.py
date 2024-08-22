@@ -59,7 +59,7 @@ class LoadingActions:
 
     def init_sort(self, graph: Dict[str, Set[str]]):
         rev_graph = reverse_graph(graph)
-        to_load = self.init | self.reload
+        to_load = (self.init | self.reload) - self.failed
         to_load |= find_all_dependents(to_load, rev_graph)
         sub_graph = {n: graph[n] for n in to_load}
         init_order = [n for n in topo_sort(sub_graph) if n in to_load]
@@ -67,7 +67,7 @@ class LoadingActions:
 
     def term_sort(self, graph: Dict[str, Set[str]]):
         rev_graph = reverse_graph(graph)
-        to_term = self.reload | self.term
+        to_term = (self.reload | self.term) - self.failed
         to_term |= find_all_dependents(to_term, rev_graph)
         sub_graph = {n: graph[n] for n in to_term}
         term_order = [n for n in topo_sort(sub_graph) if n in to_term]
@@ -81,27 +81,11 @@ class UpdateActions:
 
 
 @dataclass
-class AppActions:
-    """Stores which apps to initialize and terminate, as well as the total number of apps and the number of active apps.
-
-    Attributes:
-        init: Set of apps to initialize, which ultimately happens in :meth:`AppManagement._load_apps` as part of :meth:`AppManagement.check_app_updates`
-        term: Set of apps to terminate, which ultimately happens in :meth:`AppManagement._terminate_apps` as part of :meth:`AppManagement.check_app_updates`
-        total: Total number of apps
-        active: Number of active apps
-    """
-
-    apps_to_initialize: Set[str] = field(default_factory=set)
-    apps_to_terminate: Set[str] = field(default_factory=set)
-    total: int = 0
-    active: int = 0
-
-
-@dataclass
 class ManagedObject:
     type: Literal["app", "plugin", "sequence"]
     object: Any
     id: str
+    module_path: Optional[Path] = None
     pin_app: bool = False
     pin_thread: Optional[int] = None
     running: bool = False
@@ -314,26 +298,16 @@ class AppManagement:
                 await init_func()
             else:
                 await utils.run_in_executor(self, init_func)
-            await self.set_state(app_name, state="idle")
+        except Exception:
+            await self.increase_inactive_apps(app_name)
+            await self.set_state(app_name, state="initialize_error")
+            raise
+        else:
             await self.increase_active_apps(app_name)
+            await self.set_state(app_name, state="idle")
 
             event_data = {"event_type": "app_initialized", "data": {"app": app_name}}
-
             await self.AD.events.process_event("admin", event_data)
-
-        except TypeError:
-            self.AD.threading.report_callback_sig(app_name, "initialize", init_func, {})
-        except Exception:
-            await self.set_state(app_name, state="initialize_error")
-            await self.increase_inactive_apps(app_name)
-            error_logger = logging.getLogger("Error.{}".format(app_name))
-            error_logger.warning("-" * 60)
-            error_logger.warning("Unexpected error running initialize() for %s", app_name)
-            error_logger.warning("-" * 60)
-            error_logger.warning(traceback.format_exc())
-            error_logger.warning("-" * 60)
-            if self.AD.logging.separate_error_log() is True:
-                self.logger.warning("Logged an error to %s", self.AD.logging.get_filename("error_log"))
 
     async def terminate_app(self, app_name: str, delete: bool = True) -> bool:
         try:
@@ -479,7 +453,7 @@ class AppManagement:
         except AttributeError as e:
             await self.increase_inactive_apps(app_name)
             raise AppClassNotFound(
-                f"Unable to find '{class_name}' in module '{mod_obj.__name__}' as defined in app '{app_name}'"
+                f"Unable to find '{class_name}' in module '{mod_obj.__file__}' as defined in app '{app_name}'"
             ) from e
 
         if utils.count_positional_arguments(app_class) != 3:
@@ -500,6 +474,7 @@ class AppManagement:
                     "pin_app": self.AD.threading.app_should_be_pinned(app_name),
                     "pin_thread": pin,
                     "running": True,
+                    "module_path": Path(mod_obj.__file__),
                 }
             )
 
@@ -966,7 +941,8 @@ class AppManagement:
         app_load_order = update_actions.apps.init_sort(self.app_config.depedency_graph())
         if app_load_order:
             self.logger.debug("App start order: %s", app_load_order)
-            # TODO combine with self.start_apps
+            await self.start_app()
+            # TODO combine with self.start_apps. This will also solve the
             await self._create_apps(update_actions)
             await self._initialize_apps(app_load_order)
 
@@ -1028,18 +1004,17 @@ class AppManagement:
                     success_text=f"Created app object for '{app_name}'",
                     error_text=f"Unexpected error creating app object for '{app_name}' in {rel_path}",
                 )
-                async def safe_create(self: Self, app_name: str):
+                async def create_safely(self: Self):
                     try:
                         result = await self.create_app_object(app_name)
                     except Exception:
                         await self.increase_inactive_apps(app_name)
-                        # load_order.remove(app_name)
                         update_actions.apps.failed.add(app_name)
                         raise
                     else:
                         return result
 
-                await safe_create(self, app_name)
+                await create_safely(self)
 
     async def _initialize_apps(self, start_order: List[str]):
         for app_name in start_order:
@@ -1053,7 +1028,16 @@ class AppManagement:
                 self.logger.debug("Skipping initialize for '%s' because it's a global module", app_name)
                 continue
             else:
-                await self.initialize_app(app_name)
+                mod_path = self.objects[app_name].module_path.relative_to(self.AD.app_dir.parent)
+
+                @utils.warning_decorator(
+                    # start_text=f"Calling initialize() for {app_name}",
+                    error_text=f"Unexpected error running initialize() for {app_name} from {mod_path}"
+                )
+                async def initialize_safely(self: Self):
+                    await self.initialize_app(app_name)
+
+                await initialize_safely(self)
         self.apps_initialized = True
 
     def apps_per_module(self, module_name: str) -> Set[str]:
