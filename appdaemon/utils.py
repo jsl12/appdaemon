@@ -314,6 +314,11 @@ def executor_decorator(func):
     return wrapper
 
 
+def format_exception(e):
+    # return '\n\n' + ''.join(traceback.format_exception_only(e))
+    return traceback.format_exc()
+
+
 def warning_decorator(
     start_text: str = None, success_text: str = None, error_text: str = None, finally_text: str = None
 ):
@@ -321,13 +326,16 @@ def warning_decorator(
 
     def decorator(func):
         @wraps(func)
-        def wrapper(self, *args, **kwargs):
+        async def wrapper(self, *args, **kwargs):
             try:
                 nonlocal start_text
                 if start_text is not None:
                     self.logger.debug(start_text)
 
-                result = func(self, *args, **kwargs)
+                if asyncio.iscoroutinefunction(func):
+                    result = await func(self, *args, **kwargs)
+                else:
+                    result = func(self, *args, **kwargs)
             except Exception as e:
                 error_logger = self.error
                 error_logger.warning("-" * 60)
@@ -338,8 +346,14 @@ def warning_decorator(
                 if isinstance(e, ValidationError):
                     error_logger.warning(e)
                 else:
-                    error_logger.warning(traceback.format_exc())
+                    error_logger.warning(format_exception(e))
                 error_logger.warning("-" * 60)
+
+                if self.AD.logging.separate_error_log():
+                    self.logger.warning(
+                        "Logged an error to %s",
+                        self.AD.logging.get_filename("error_log"),
+                    )
             else:
                 if success_text:
                     self.logger.debug(success_text)
@@ -795,6 +809,10 @@ def read_yaml_config(file: Path) -> Dict[str, Dict]:
     yaml.add_constructor("!secret", _dummy_secret, Loader=yaml.SafeLoader)
     with file.open("r") as yamlfd:
         config = yaml.safe_load(yamlfd)
+
+    # No need to keep processing if the file is empty
+    if not bool(config):
+        return {}
 
     if "secrets" in config:
         secrets_file = Path(config["secrets"])

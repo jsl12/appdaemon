@@ -152,6 +152,7 @@ class Threading:
             self.auto_pin = False
         else:
             # Force a config check here so we have an accurate activate app count
+            self.AD.app_management.logger.debug("Reading app config files to determine how many threads to make")
             cfg_paths = await self.AD.app_management.get_app_config_files()
             full_cfg: AllAppConfig = await self.AD.app_management.read_all(cfg_paths)
             self.total_threads = full_cfg.active_app_count

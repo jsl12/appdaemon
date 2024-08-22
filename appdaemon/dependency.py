@@ -57,6 +57,14 @@ def resolve_relative_import(node: ast.ImportFrom, path: Path):
     return res
 
 
+class DependencyResolutionFail(Exception):
+    base_exception: Exception
+
+    def __init__(self, base_exception: Exception, *args: object) -> None:
+        super().__init__(*args)
+        self.base_exception = base_exception
+
+
 def get_file_deps(file_path: Path) -> Set[str]:
     """Recursively parses the content of the Python file to find which modules and/or packages each file depends on.
 
@@ -72,7 +80,10 @@ def get_file_deps(file_path: Path) -> Set[str]:
         file_content = file.read()
 
     def gen_modules():
-        tree = ast.parse(file_content, filename=file_path)
+        try:
+            tree = ast.parse(file_content, filename=file_path)
+        except Exception as e:
+            raise DependencyResolutionFail(base_exception=e)
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

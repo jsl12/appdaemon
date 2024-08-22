@@ -28,6 +28,7 @@ from appdaemon.dependency import (
 )
 from appdaemon.models.app_config import AllAppConfig, AppConfig, GlobalModule
 from appdaemon.models.internal.file_check import FileCheck
+from appdaemon.dependency import DependencyResolutionFail
 
 if TYPE_CHECKING:
     from appdaemon.appdaemon import AppDaemon
@@ -213,7 +214,7 @@ class AppManagement:
     # @warning_decorator
     async def set_state(self, name: str, **kwargs):
         # not a fully qualified entity name
-        if name.find(".") == -1:
+        if not name.startswith("sensor."):
             entity_id = f"app.{name}"
         else:
             entity_id = name
@@ -294,14 +295,15 @@ class AppManagement:
             return obj.object
 
     async def initialize_app(self, app_name: str):
-        if app_name not in self.objects:
-            self.logger.warning("Unable to find module %s - skipping initialize", app_name)
+        if obj := self.objects.get(app_name):
+            if (init_func := getattr(obj.object, "initialize", None)) is None:
+                self.logger.warning("Unable to find initialize() function in class %s - skipped", app_name)
+                await self.increase_inactive_apps(app_name)
+                self.objects[app_name].running = False
+                return
+        else:
+            self.logger.warning("Unable to find object for %s - skipping initialize", app_name)
             await self.increase_inactive_apps(app_name)
-            return
-        elif (init_func := getattr(self.objects[app_name].object, "initialize", None)) is None:
-            self.logger.warning("Unable to find initialize() function in class %s - skipped", app_name)
-            await self.increase_inactive_apps(app_name)
-            self.objects[app_name].running = False
             return
 
         # Call its initialize function
@@ -321,6 +323,8 @@ class AppManagement:
         except TypeError:
             self.AD.threading.report_callback_sig(app_name, "initialize", init_func, {})
         except Exception:
+            await self.set_state(app_name, state="initialize_error")
+            await self.increase_inactive_apps(app_name)
             error_logger = logging.getLogger("Error.{}".format(app_name))
             error_logger.warning("-" * 60)
             error_logger.warning("Unexpected error running initialize() for %s", app_name)
@@ -329,8 +333,6 @@ class AppManagement:
             error_logger.warning("-" * 60)
             if self.AD.logging.separate_error_log() is True:
                 self.logger.warning("Logged an error to %s", self.AD.logging.get_filename("error_log"))
-            await self.set_state(app_name, state="initialize_error")
-            await self.increase_inactive_apps(app_name)
 
     async def terminate_app(self, app_name: str, delete: bool = True) -> bool:
         try:
@@ -545,21 +547,21 @@ class AppManagement:
 
         return True
 
-    @utils.executor_decorator
-    def read_all(self, config_files: Iterable[Path] = None) -> AllAppConfig:
+    async def read_all(self, config_files: Iterable[Path] = None) -> AllAppConfig:
         config_files = config_files or set(self.mtimes_config.paths)
 
-        def config_model_factory():
+        async def config_model_factory():
             """Creates a generator that sets the config_path of app configs"""
             for path in config_files:
                 rel_path = path.relative_to(self.AD.app_dir.parent)
 
                 @utils.warning_decorator(
-                    start_text=f"{rel_path} read start",
-                    success_text=f"{rel_path} read success",
+                    # start_text=f"{rel_path} read start",
+                    success_text=f"Read {rel_path}",
                     error_text=f"Unexepected error while reading {rel_path}",
-                    finally_text=f"{rel_path} read finish",
+                    # finally_text=f"{rel_path} read finish",
                 )
+                @utils.executor_decorator
                 def safe_read(self: Self, path: Path):
                     raw_cfg = self.read_config_file(path)
                     config_model = AllAppConfig.model_validate(raw_cfg)
@@ -568,7 +570,7 @@ class AppManagement:
                             cfg.config_path = path
                     return config_model
 
-                yield safe_read(self, path)
+                yield await safe_read(self, path)
 
         def update(d1: Dict, d2: Dict) -> Dict:
             """Internal funciton to log warnings if an app's name gets repeated."""
@@ -576,7 +578,9 @@ class AppManagement:
                 self.logger.warning(f"Apps re-defined: {overlap}")
             return d1.update(d2) or d1
 
-        models = [m.model_dump(by_alias=True, exclude_unset=True) for m in config_model_factory() if m is not None]
+        models = [
+            m.model_dump(by_alias=True, exclude_unset=True) async for m in config_model_factory() if m is not None
+        ]
         combined_configs = reduce(update, models, {})
         return AllAppConfig.model_validate(combined_configs)
 
@@ -646,7 +650,9 @@ class AppManagement:
         if self.AD.threading.auto_pin:
             active_apps = self.app_config.active_app_count
             if active_apps > self.AD.threading.thread_count:
-                for _ in range(active_apps - self.AD.threading.thread_count):
+                threads_to_add = active_apps - self.AD.threading.thread_count
+                self.logger.debug(f"Adding {threads_to_add} threads based on the active app count")
+                for _ in range(threads_to_add):
                     await self.AD.threading.add_thread(silent=False, pinthread=True)
 
     def read_config_file(self, file: Path) -> AllAppConfig:
@@ -655,6 +661,8 @@ class AppManagement:
         This has to exist as a method of AppManagement for the decorator, which makes it run in the executor, to work properly. It needs access to a `self` argument, that it uses to get the asyncio event loop and executor.
         """
         raw_cfg = utils.read_config_file(file)
+        if not bool(raw_cfg):
+            self.logger.warning(f"Loaded an empty config file: {file.relative_to(self.AD.app_dir.parent)}")
         config_model = AllAppConfig.model_validate(raw_cfg)
         for cfg in config_model.root.values():
             if isinstance(cfg, AppConfig):
@@ -760,10 +768,14 @@ class AppManagement:
 
             update_actions = UpdateActions()
 
-            if mode == UpdateMode.NORMAL:
-                await self.check_app_python_files(update_actions)
-
             await self.check_app_config_files(update_actions)
+
+            if mode == UpdateMode.NORMAL:
+                try:
+                    await self.check_app_python_files(update_actions)
+                except DependencyResolutionFail as e:
+                    self.logger.error(f"Error reading python files: {utils.format_exception(e.base_exception)}")
+                    return
 
             if mode == UpdateMode.TERMINATE:
                 update_actions.modules = LoadingActions()
@@ -976,6 +988,9 @@ class AppManagement:
 
                     failed_to_import.add(module_name)
 
+                    # Find modules that depend on the failed one
+                    self.app_config.reversed_dependency_graph()
+
         failed_import_apps = set(
             app_name for module_name in failed_to_import for app_name in self.apps_per_module(module_name)
         )
@@ -1001,27 +1016,24 @@ class AppManagement:
                 await self.set_state(app_name, state="global")
                 await self.increase_inactive_apps(app_name)
             else:
-                error_logger = logging.getLogger(f"Error.{app_name}")
-                try:
-                    await self.create_app_object(app_name)
-                except (AppClassNotFound, AppClassSignatureError, AppInstantiationError, PinOutofRange) as e:
-                    await self.increase_inactive_apps(app_name)
-                    self.logger.warning(f"{type(e).__name__}: {e}")
-                except ModuleNotFoundError as e:
-                    await self.increase_inactive_apps(app_name)
-                    self.logger.warning(f"{type(e).__name__}: {e} found for app '{app_name}'")
-                except Exception:
-                    await self.increase_inactive_apps(app_name)
-                    error_logger.warning("-" * 60)
-                    error_logger.warning("Unexpected error initializing app: %s:", app_name)
-                    error_logger.warning("-" * 60)
-                    error_logger.warning(traceback.format_exc())
-                    error_logger.warning("-" * 60)
-                    if self.AD.logging.separate_error_log():
-                        self.logger.warning(
-                            "Logged an error to %s",
-                            self.AD.logging.get_filename("error_log"),
-                        )
+                rel_path = cfg.config_path.relative_to(self.AD.app_dir.parent)
+
+                @utils.warning_decorator(
+                    # start_text=f"Creating app object for '{app_name}'",
+                    success_text=f"Created app object for '{app_name}'",
+                    error_text=f"Unexpected error creating app object for '{app_name}' in {rel_path}",
+                )
+                async def safe_create(self: Self, app_name: str):
+                    try:
+                        result = await self.create_app_object(app_name)
+                    except Exception:
+                        await self.increase_inactive_apps(app_name)
+                        load_order.remove(app_name)
+                        raise
+                    else:
+                        return result
+
+                await safe_create(self, app_name)
 
     async def _initialize_apps(self, start_order: List[str]):
         for app_name in start_order:
