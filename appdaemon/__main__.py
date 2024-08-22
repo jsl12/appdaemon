@@ -126,7 +126,7 @@ class ADMain:
 
         try:
             # if to use uvloop
-            if ad_kwargs.get("uvloop") is True and uvloop:
+            if ad_kwargs.get("uvloop", False) and uvloop:
                 self.logger.info("Running AD using uvloop")
                 uvloop.install()
 
