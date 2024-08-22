@@ -17,7 +17,7 @@ from functools import wraps
 from logging import Logger
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Set, Union
 
 import appdaemon.utils as utils
 from appdaemon.models.internal.app_config import AppConfigFileCheck
@@ -76,16 +76,16 @@ class AppActions:
         active: Number of active apps
     """
 
-    init: Dict[str, int] = field(default_factory=dict)
-    term: Dict[str, int] = field(default_factory=dict)
+    init: Set[str] = field(default_factory=set)
+    term: Set[str] = field(default_factory=set)
     total: int = 0
     active: int = 0
 
     def mark_app_for_initialization(self, appname: str):
-        self.init[appname] = 1
+        self.init.add(appname)
 
     def mark_app_for_termination(self, appname: str):
-        self.term[appname] = 1
+        self.term.add(appname)
 
 
 class AppManagement:
@@ -128,7 +128,8 @@ class AppManagement:
     check_updates_lock: asyncio.Lock = asyncio.Lock()
     last_config_file_check: AppConfigFileCheck = AppConfigFileCheck()
 
-    app_config_files: Dict[Path, List[str]] = {}
+    app_config_files: Dict[Path, Set[str]] = {}
+    """Maps paths of app config files (.yaml or .toml) to the list of apps that come from those files"""
 
     active_apps_sensor: str = "sensor.active_apps"
     inactive_apps_sensor: str = "sensor.inactive_apps"
@@ -193,17 +194,17 @@ class AppManagement:
 
         return await self.AD.state.get_state("_app_management", "admin", entity_id, **kwargs)
 
-    async def add_entity(self, name, state, attributes):
+    async def add_entity(self, name: str, state, attributes):
         # not a fully qualified entity name
-        if name.find(".") == -1:
-            entity_id = "app.{}".format(name)
+        if "." not in name:
+            entity_id = f"app.{name}"
         else:
             entity_id = name
 
         await self.AD.state.add_entity("admin", entity_id, state, attributes)
 
-    async def remove_entity(self, name):
-        await self.AD.state.remove_entity("admin", "app.{}".format(name))
+    async def remove_entity(self, name: str):
+        await self.AD.state.remove_entity("admin", f"app.{name}")
 
     async def init_admin_stats(self):
         # create sensors
@@ -428,8 +429,7 @@ class AppManagement:
             else:
                 pin = -1
 
-            # mod_obj = await utils.run_in_executor(self, importlib.import_module, module_name)
-            mod_obj = importlib.import_module(module_name)
+            mod_obj = await utils.run_in_executor(self, importlib.import_module, module_name)
 
             app_class = getattr(mod_obj, class_name, None)
             if app_class is None:
@@ -505,117 +505,107 @@ class AppManagement:
 
         return True
 
-    async def read_config(self) -> Dict[str, Dict[str, Any]]:  # noqa: C901
+    async def read_full_config(self, config_files: Iterable[Path]) -> Dict[str, Dict[str, Any]]:  # noqa: C901
         """Walks the apps directory and reads all the config files with :func:`~.utils.read_config_file`, which reads individual config files and runs in the :attr:`~.appdaemon.AppDaemon.executor`.
 
         Returns:
             Dict[str, Dict[str, Any]]: Loaded app configuration
         """
         new_config = None
+        for path in config_files:
+            valid_apps = {}
+            config: Dict[str, Dict] = await utils.run_in_executor(self, self.read_config_file, path)
 
-        for root, subdirs, files in await utils.run_in_executor(self, os.walk, self.AD.app_dir):
-            subdirs[:] = [d for d in subdirs if d not in self.AD.exclude_dirs and "." not in d]
-            if utils.is_valid_root_path(root):
-                for file in files:
-                    if file[-5:] == self.ext and file[0] != ".":
-                        path = os.path.join(root, file)
-                        self.logger.debug("Reading %s", path)
-                        config: Dict[str, Dict] = await utils.run_in_executor(self, self.read_config_file, path)
-                        valid_apps = {}
-                        if type(config).__name__ == "dict":
-                            for app in config:
-                                if config[app] is not None:
-                                    app_valid = True
-                                    if app == "global_modules":
-                                        self.logger.warning(
-                                            "global_modules directive has been deprecated and will be removed"
-                                            " in a future release"
-                                        )
-                                        #
-                                        # Check the parameter format for string or list
-                                        #
-                                        if isinstance(config[app], str):
-                                            valid_apps[app] = [config[app]]
-                                        elif isinstance(config[app], list):
-                                            valid_apps[app] = config[app]
-                                        else:
-                                            if self.AD.invalid_config_warnings:
-                                                self.logger.warning(
-                                                    (
-                                                        "global_modules should be a list or a string in File"
-                                                        " '%s' - ignoring"
-                                                    ),
-                                                    file,
-                                                )
-                                    elif app == "sequence":
-                                        #
-                                        # We don't care what it looks like just pass it through
-                                        #
-                                        valid_apps[app] = config[app]
-                                    elif "." in app:
-                                        #
-                                        # We ignore any app containing a dot.
-                                        #
-                                        pass
-                                    elif (
-                                        isinstance(config[app], dict)
-                                        and "class" in config[app]
-                                        and "module" in config[app]
-                                    ):
-                                        valid_apps[app] = config[app]
-                                        valid_apps[app]["config_path"] = path
-                                    elif (
-                                        isinstance(config[app], dict)
-                                        and "module" in config[app]
-                                        and "global" in config[app]
-                                        and config[app]["global"] is True
-                                    ):
-                                        valid_apps[app] = config[app]
-                                        valid_apps[app]["config_path"] = path
-                                    else:
-                                        app_valid = False
-                                        if self.AD.invalid_config_warnings:
-                                            self.logger.warning(
-                                                "App '%s' missing 'class' or 'module' entry - ignoring",
-                                                app,
-                                            )
+            if not isinstance(config, dict):
+                if self.AD.invalid_config_warnings:
+                    self.logger.warning(
+                        "File '%s' invalid structure, ignoring",
+                        path.relative_to(self.AD.app_dir.parent),
+                    )
+                continue
 
-                                    if app_valid is True:
-                                        # now add app to the path
-                                        if path not in self.app_config_files:
-                                            self.app_config_files[path] = []
+            for app_name, cfg in config.items():
+                if cfg is None:
+                    if self.AD.invalid_config_warnings:
+                        self.logger.warning(
+                            "App '%s' has null configuration, ignoring",
+                            app_name,
+                        )
+                    continue  # skip to next app
 
-                                        self.app_config_files[path].append(app)
-                        else:
-                            if self.AD.invalid_config_warnings:
-                                self.logger.warning(
-                                    "File '%s' invalid structure - ignoring",
-                                    os.path.join(root, file),
-                                )
+                app_is_valid = True
+                if app_name == "global_modules":
+                    self.logger.warning(
+                        "global_modules directive has been deprecated and will be removed" " in a future release"
+                    )
+                    #
+                    # Check the parameter format for string or list
+                    #
+                    if isinstance(cfg, str):
+                        valid_apps[app_name] = [cfg]
+                    elif isinstance(cfg, list):
+                        valid_apps[app_name] = cfg
+                    else:
+                        if self.AD.invalid_config_warnings:
+                            self.logger.warning(
+                                "global_modules should be a list or a string in file '%s' - ignoring",
+                                path.relative_to(self.AD.app_dir.parent),
+                            )
+                        continue  # skip to next app
+                elif app_name == "sequence":
+                    #
+                    # We don't care what it looks like just pass it through
+                    #
+                    valid_apps[app_name] = cfg
+                elif "." in app_name:
+                    #
+                    # We ignore any app containing a dot.
+                    #
+                    continue
+                elif isinstance(cfg, dict) and "class" in cfg and "module" in cfg:
+                    valid_apps[app_name] = cfg
+                    valid_apps[app_name]["config_path"] = path
+                elif isinstance(cfg, dict) and "module" in cfg and "global" in cfg and cfg["global"] is True:
+                    valid_apps[app_name] = cfg
+                    valid_apps[app_name]["config_path"] = path
+                else:
+                    app_is_valid = False
+                    if self.AD.invalid_config_warnings:
+                        self.logger.warning(
+                            "App '%s' missing 'class' or 'module' entry - ignoring",
+                            app_name,
+                        )
 
-                        if new_config is None:
-                            new_config = {}
-                        for app in valid_apps:
-                            if app == "global_modules":
-                                if app in new_config:
-                                    new_config[app].extend(valid_apps[app])
-                                    continue
-                            if app == "sequence":
-                                if app in new_config:
-                                    new_config[app] = {
-                                        **new_config[app],
-                                        **valid_apps[app],
-                                    }
-                                    continue
+                if app_is_valid:
+                    # now add app to the path
+                    if path not in self.app_config_files:
+                        self.app_config_files[path] = set()
 
-                            if app in new_config:
-                                self.logger.warning(
-                                    "File '%s' duplicate app: %s - ignoring",
-                                    os.path.join(root, file),
-                                    app,
-                                )
-                            else:
-                                new_config[app] = valid_apps[app]
+                    self.app_config_files[path].add(app_name)
+
+            if new_config is None:
+                new_config = {}
+            for app_name in valid_apps:
+                if app_name == "global_modules":
+                    if app_name in new_config:
+                        new_config[app_name].extend(valid_apps[app_name])
+                        continue
+                if app_name == "sequence":
+                    if app_name in new_config:
+                        new_config[app_name] = {
+                            **new_config[app_name],
+                            **valid_apps[app_name],
+                        }
+                        continue
+
+                if app_name in new_config:
+                    self.logger.warning(
+                        "File '%s' duplicate app: %s - ignoring",
+                        path.relative_to(self.AD.app_dir.parent),
+                        app_name,
+                    )
+                else:
+                    new_config[app_name] = valid_apps[app_name]
 
         await self.check_sequence_update(new_config.get("sequence", {}))
 
@@ -651,7 +641,7 @@ class AppManagement:
 
     # Run in executor
     def check_app_config_files(self, previous_config_files: AppConfigFileCheck) -> AppConfigFileCheck:
-        current_config_files = AppConfigFileCheck.from_iterable(self.get_config_files())
+        current_config_files = AppConfigFileCheck.from_iterable(self.get_app_config_files())
         current_config_files.compare_to_previous(previous_config_files)
 
         # adjust self.app_config_files based on current situation
@@ -669,6 +659,7 @@ class AppManagement:
     def read_config_file(self, file: Path) -> Dict[str, Dict]:
         """Reads a single YAML or TOML file."""
         file = Path(file) if not isinstance(file, Path) else file
+        self.logger.debug("Reading %s", file)
         try:
             return utils.read_config_file(file)
         except Exception:
@@ -696,71 +687,68 @@ class AppManagement:
             )
 
             if self.last_config_file_check.there_were_changes:
-                if silent is False:
-                    self.logger.info("Reading config")
+                for file in sorted(self.last_config_file_check.new):
+                    self.logger.info("Added app config file: %s", file.relative_to(self.AD.app_dir.parent))
 
-                new_config = await self.read_config()
+                for file in sorted(self.last_config_file_check.modified):
+                    self.logger.info("Modified app config file: %s", file.relative_to(self.AD.app_dir.parent))
 
-                if new_config is None:
-                    if silent is False:
-                        self.logger.warning("New config not applied")
+                for file in sorted(self.last_config_file_check.deleted):
+                    self.logger.info("Deleted app config file: %s", file.relative_to(self.AD.app_dir.parent))
+
+                self.logger.info("Reading full app config")
+                files_to_load = self.last_config_file_check.new or self.last_config_file_check.modified
+                new_full_config = await self.read_full_config(files_to_load)
+
+                if new_full_config is None:
+                    self.logger.warning("New config not applied")
                     return
 
-                if silent is False:
-                    for file in self.last_config_file_check.deleted:
-                        self.logger.info("%s deleted", file)
-                    new_or_modified = self.last_config_file_check.new or self.last_config_file_check.modified
-                    for file in new_or_modified:
-                        self.logger.info("%s added or modified", file)
-
-                # Check for changes
-                for name in self.app_config:
+                # Check for changes and deletions
+                for name, cfg in self.app_config.items():  # self.app_config will be empty on the first call
                     if name in self.non_apps:
-                        continue
+                        continue  # skip non-apps
 
-                    if name in new_config:
-                        # first we need to remove thhe config path if it exists
-                        config_path = new_config[name].pop("config_path", None)
+                    # check the newly loaded config for a config for this app's name
+                    if new_cfg := new_full_config.get(name):
+                        # the config_path key is set by self.read_full_config
+                        # this removes it and sets the config_path attribute of the state of this app
+                        if config_path := new_cfg.pop("config_path", None):
+                            config_path = await utils.run_in_executor(self, os.path.abspath, config_path)
+                            await self.set_state(name, config_path=config_path)
 
-                        if self.app_config[name] != new_config[name]:
+                        if new_cfg != cfg:
                             # Something changed, clear and reload
-
-                            if silent is False:
+                            if not silent:
                                 self.logger.info("App '%s' changed", name)
                             actions.mark_app_for_termination(name)
                             actions.mark_app_for_initialization(name)
 
-                        if config_path:
-                            config_path = await utils.run_in_executor(self, os.path.abspath, config_path)
-
-                            # now we update the entity
-                            await self.set_state(name, config_path=config_path)
                     else:
-                        # Section has been deleted, clear it out
+                        # if it wasn't found, then it was deleted
+                        if not silent:
+                            self.logger.info("App '%s' deleted", name)
 
-                        if silent is False:
-                            self.logger.info("App '{}' deleted".format(name))
-                        #
                         # Since the entry has been deleted we can't sensibly determine dependencies
                         # So just immediately terminate it
-                        #
                         await self.terminate_app(name, delete=True)
                         await self.remove_entity(name)
+                        # actions.mark_app_for_termination(name)
 
-                for name in new_config:
+                # Check for added app configs
+                for name, new_cfg in new_full_config.items():
                     if name in self.non_apps:
-                        continue
+                        continue  # skip non-apps
 
+                    # Check for new config section
                     if name not in self.app_config:
-                        #
-                        # New section added!
-                        #
+                        # if config_path := new_cfg.pop("config_path"):
+                        #     config_path = await utils.run_in_executor(self, os.path.abspath, config_path)
 
-                        if "class" in new_config[name] and "module" in new_config[name]:
-                            # first we need to remove thhe config path if it exists
-                            config_path = await utils.run_in_executor(
-                                self, os.path.abspath, new_config[name].pop("config_path")
-                            )
+                        if "class" in new_cfg and "module" in new_cfg:
+                            # first we need to remove the config path if it exists
+                            if config_path := new_cfg.pop("config_path"):
+                                config_path = await utils.run_in_executor(self, os.path.abspath, config_path)
 
                             self.logger.info("App '%s' added", name)
                             actions.mark_app_for_initialization(name)
@@ -770,21 +758,15 @@ class AppManagement:
                                 {
                                     "totalcallbacks": 0,
                                     "instancecallbacks": 0,
-                                    "args": new_config[name],
+                                    "args": new_cfg,
                                     "config_path": config_path,
                                 },
                             )
-                        elif name in self.non_apps:
-                            pass
                         else:
-                            if self.AD.invalid_config_warnings:
-                                if silent is False:
-                                    self.logger.warning(
-                                        "App '%s' missing 'class' or 'module' entry - ignoring",
-                                        name,
-                                    )
+                            if self.AD.invalid_config_warnings and not silent:
+                                self.logger.warning("App '%s' missing 'class' or 'module' entry - ignoring", name)
 
-                self.app_config = new_config
+                self.app_config = new_full_config
                 actions.total_apps = len(self.app_config)
 
                 for name in self.non_apps:
@@ -874,12 +856,13 @@ class AppManagement:
                     self.modules[module_name] = importlib.import_module(module_name)
                 else:
                     # A regular app
-                    self.logger.info("Loading App Module: %s", module_name)
                     if module_name not in self.modules:
                         self.modules[module_name] = importlib.import_module(module_name)
+                        self.logger.info("Loaded App Module: %s", self.modules[module_name])
                     else:
                         # We previously imported it so we need to reload to pick up any potential changes
                         importlib.reload(self.modules[module_name])
+                        self.logger.info("Reloaded App Module: %s", self.modules[module_name])
             elif "global_modules" in self.app_config and module_name in self.app_config["global_modules"]:
                 self.logger.info("Loading Global Module: %s", module_name)
                 self.modules[module_name] = importlib.import_module(module_name)
@@ -1014,22 +997,22 @@ class AppManagement:
             await utils.run_in_executor(self, self._refresh_monitored_files, modules)
 
             # Refresh app config
-            apps = await self.check_config()
+            actions = await self.check_config()
 
-            await self._check_for_deleted_modules(mode, apps)
+            await self._check_for_deleted_modules(mode, actions)
 
-            self._add_reload_apps(apps, modules)
+            self._add_reload_apps(actions, modules)
 
-            await self._restart_plugin(plugin, apps)
+            await self._restart_plugin(plugin, actions)
 
-            apps_terminated = await self._terminate_apps(mode, apps, modules)
+            apps_terminated = await self._terminate_apps(mode, actions, modules)
 
-            await self._load_reload_modules(apps, modules)
+            await self._load_reload_modules(actions, modules)
 
             if mode == UpdateMode.INIT:
                 self.logger.info(f"Loaded modules: {list(self.modules.values())}")
 
-            await self._load_apps(mode, apps, apps_terminated)
+            await self._load_apps(mode, actions, apps_terminated)
 
             self.apps_initialized = True
 
@@ -1083,11 +1066,11 @@ class AppManagement:
             and os.access(f, os.R_OK)  # skip unreadable files
         )
 
-    def get_config_files(self) -> Iterable[Path]:
+    def get_app_config_files(self) -> Iterable[Path]:
         """Iterates through config files in the config directory. Excludes directory names defined in exclude_dirs and files with a "." character. Also excludes files that aren't readable."""
         return (
             f
-            for f in Path(self.AD.config_dir).resolve().rglob(f"*{self.ext}")
+            for f in Path(self.AD.app_dir).resolve().rglob(f"*{self.ext}")
             if f.parent.name not in self.AD.exclude_dirs  # apply exclude_dirs
             and "." not in f.stem
             and os.access(f, os.R_OK)  # skip unreadable files
@@ -1122,7 +1105,7 @@ class AppManagement:
 
                 # if it's not part of a package, add a module load config for it
                 if not file.with_name("__init__.py").exists():
-                    self.logger.info("Found module %s", file)
+                    self.logger.info("Found module %s", file.relative_to(self.AD.app_dir.parent))
                     modules.append(ModuleLoad(path=file, reload=False))
                 else:
                     pkg_name: str = self.mod_pkg_map[file]
@@ -1140,7 +1123,7 @@ class AppManagement:
                 self.logger.info("Removing module %s", file)
                 del self.monitored_files[file]
                 for app in self.apps_per_module(self.get_module_from_path(file)):
-                    apps.term[app] = 1
+                    apps.mark_app_for_termination(app)
 
                 deleted_modules.append(file)
 
@@ -1196,7 +1179,7 @@ class AppManagement:
         """Terminate apps. Part of self.check_app_updates sequence"""
         apps_terminated: Dict[str, bool] = {}  # stores properly terminated apps
         if apps is not None and apps.term:
-            prio_apps = self.get_app_deps_and_prios(apps.term, mode)
+            prio_apps = self.get_app_load_order(apps.term, mode)
 
             # Mark dependant global modules for reload
             for app_name in sorted(prio_apps, key=prio_apps.get):
@@ -1220,7 +1203,7 @@ class AppManagement:
 
         return apps_terminated
 
-    async def _load_reload_modules(self, apps: AppActions, modules: List[ModuleLoad]):
+    async def _load_reload_modules(self, actions: AppActions, modules: List[ModuleLoad]):
         """Calls self.read_app for each module in the list"""
         for mod in modules:
             try:
@@ -1236,45 +1219,46 @@ class AppManagement:
 
                 self.logger.warning("Removing associated apps:")
                 module = self.get_module_from_path(mod.name)
-                for app in self.app_config:
-                    if "module" in self.app_config[app] and self.app_config[app]["module"] == module:
-                        if apps.init and app in apps.init:
-                            del apps.init[app]
-                            self.logger.warning("%s", app)
-                            await self.set_state(app, state="compile_error")
+                for app_name, cfg in self.app_config.items():
+                    if cfg.get("module") == module and app_name in actions.init:
+                        actions.init.remove(app_name)
+                        self.logger.warning("%s", app_name)
+                        await self.set_state(app_name, state="compile_error")
 
-    async def _load_apps(self, mode: UpdateMode, apps: AppActions, apps_terminated: Dict[str, bool]):
+    async def _load_apps(self, mode: UpdateMode, actions: Optional[AppActions], apps_terminated: Dict[str, bool]):
         """Loads apps from imported modules/packages. Part of self.check_app_updates sequence"""
-        if apps is not None and apps.init:
-            self.logger.info(f"{len(apps.init)} apps to initialize")
-            prio_apps = self.get_app_deps_and_prios(apps.init, mode)
+        if actions is not None and actions.init:
+            self.logger.info(f"{len(actions.init)} apps to initialize")
+            prio_apps = self.get_app_load_order(actions.init, mode)
+            sorted_app_configs = sorted(self.app_config.items(), key=lambda items: prio_apps.get(items[0], 50.0))
 
             # Load Apps
-
-            for app in sorted(prio_apps, key=prio_apps.get):
+            for app_name, cfg in sorted_app_configs:
                 try:
-                    if "disable" in self.app_config[app] and self.app_config[app]["disable"] is True:
-                        self.logger.info("%s is disabled", app)
-                        await self.set_state(app, state="disabled")
-                        await self.increase_inactive_apps(app)
-                    elif "global" in self.app_config[app] and self.app_config[app]["global"] is True:
-                        await self.set_state(app, state="global")
-                        await self.increase_inactive_apps(app)
+                    if cfg.get("disable", False):
+                        self.logger.info("%s is disabled", app_name)
+                        await self.set_state(app_name, state="disabled")
+                        await self.increase_inactive_apps(app_name)
+                    if cfg.get("global", False):
+                        await self.set_state(app_name, state="global")
+                        await self.increase_inactive_apps(app_name)
                     else:
-                        if apps_terminated.get(app, True) is True:  # the app terminated properly
-                            await self.init_object(app)
+                        if apps_terminated.get(app_name, True):  # the app terminated properly
+                            await self.init_object(app_name)
 
                         else:
-                            self.logger.warning("Cannot initialize app %s, as it didn't terminate properly", app)
+                            self.logger.warning(
+                                "Cannot initialize app %s because it didn't terminate properly", app_name
+                            )
 
                 except Exception:
-                    error_logger = logging.getLogger("Error.{}".format(app))
+                    error_logger = logging.getLogger("Error.{}".format(app_name))
                     error_logger.warning("-" * 60)
-                    error_logger.warning("Unexpected error initializing app: %s:", app)
+                    error_logger.warning("Unexpected error initializing app: %s:", app_name)
                     error_logger.warning("-" * 60)
                     error_logger.warning(traceback.format_exc())
                     error_logger.warning("-" * 60)
-                    if self.AD.logging.separate_error_log() is True:
+                    if self.AD.logging.separate_error_log():
                         self.logger.warning(
                             "Logged an error to %s",
                             self.AD.logging.get_filename("error_log"),
@@ -1283,28 +1267,27 @@ class AppManagement:
             await self.AD.threading.calculate_pin_threads()
 
             # Call initialize() for apps
-
-            for app in sorted(prio_apps, key=prio_apps.get):
-                if "disable" in self.app_config[app] and self.app_config[app]["disable"] is True:
-                    pass
-                elif "global" in self.app_config[app] and self.app_config[app]["global"] is True:
-                    pass
+            for app_name, cfg in sorted_app_configs:
+                if cfg.get("disable", False):
+                    continue
+                if cfg.get("global", False):
+                    continue
                 else:
-                    if apps_terminated.get(app, True) is True:  # the app terminated properly
-                        await self.initialize_app(app)
+                    if apps_terminated.get(app_name, True):  # the app terminated properly
+                        await self.initialize_app(app_name)
 
                     else:
-                        self.logger.debug("Cannot initialize app %s, as it didn't terminate properly", app)
+                        self.logger.warning("Cannot initialize app %s, as it didn't terminate properly", app_name)
 
-    def get_app_deps_and_prios(self, applist: Iterable[str], mode: UpdateMode) -> Dict[str, float]:
-        """Gets the dependencies and priorities for the given apps
+    def get_app_load_order(self, applist: Iterable[str], mode: UpdateMode) -> Dict[str, float]:
+        """Determines the loading order for all the apps based on their dependencies
 
         Args:
             applist (Iterable[str]): Iterable of app names
             mode (UpdateMode): UpdateMode
 
         Returns:
-            _type_: _description_
+            Dictionary of app names and their load priority
         """
         # Build a list of modules and their dependencies
         deplist = []
@@ -1347,13 +1330,8 @@ class AppManagement:
         except ValueError:
             pass
 
-        # now we remove the ones we aren't interested in
-
-        final_apps = {}
-        for app_name in prio_apps:
-            if app_name in deplist:
-                final_apps[app_name] = prio_apps[app_name]
-
+        # now we remove the ones we aren't interested
+        final_apps = {app_name: val for app_name, val in prio_apps.items() if app_name in deplist}
         return final_apps
 
     def app_has_dependents(self, name):
