@@ -337,10 +337,10 @@ class AppManagement:
             await self.set_state(app_name, state="initialize_error")
             await self.increase_inactive_apps(app_name)
 
-    async def terminate_app(self, name: str, delete: bool = True) -> bool:
+    async def terminate_app(self, app_name: str, delete: bool = True) -> bool:
         try:
-            if (obj := self.objects.get(name)) and (term := getattr(obj.object, "terminate", None)):
-                self.logger.info("Calling terminate() for '%s'", name)
+            if (obj := self.objects.get(app_name)) and (term := getattr(obj.object, "terminate", None)):
+                self.logger.info("Calling terminate() for '%s'", app_name)
                 if asyncio.iscoroutinefunction(term):
                     await term()
                 else:
@@ -348,13 +348,13 @@ class AppManagement:
             return True
 
         except TypeError:
-            self.AD.threading.report_callback_sig(name, "terminate", term, {})
+            self.AD.threading.report_callback_sig(app_name, "terminate", term, {})
             return False
 
         except Exception:
-            error_logger = logging.getLogger("Error.{}".format(name))
+            error_logger = logging.getLogger("Error.{}".format(app_name))
             error_logger.warning("-" * 60)
-            error_logger.warning("Unexpected error running terminate() for %s", name)
+            error_logger.warning("Unexpected error running terminate() for %s", app_name)
             error_logger.warning("-" * 60)
             error_logger.warning(traceback.format_exc())
             error_logger.warning("-" * 60)
@@ -366,31 +366,32 @@ class AppManagement:
             return False
 
         finally:
-            if obj := self.objects.get(name):
+            self.logger.debug("Cleaning up app '%s'", app_name)
+            if obj := self.objects.get(app_name):
                 if delete:
-                    del self.objects[name]
+                    del self.objects[app_name]
                 else:
                     obj.running = False
 
-            await self.increase_inactive_apps(name)
+            await self.increase_inactive_apps(app_name)
 
-            await self.AD.callbacks.clear_callbacks(name)
+            await self.AD.callbacks.clear_callbacks(app_name)
 
-            self.AD.futures.cancel_futures(name)
+            self.AD.futures.cancel_futures(app_name)
 
-            self.AD.services.clear_services(name)
+            self.AD.services.clear_services(app_name)
 
-            await self.AD.sched.terminate_app(name)
+            await self.AD.sched.terminate_app(app_name)
 
-            await self.set_state(name, state="terminated")
-            await self.set_state(name, instancecallbacks=0)
+            await self.set_state(app_name, state="terminated")
+            await self.set_state(app_name, instancecallbacks=0)
 
-            event_data = {"event_type": "app_terminated", "data": {"app": name}}
+            event_data = {"event_type": "app_terminated", "data": {"app": app_name}}
 
             await self.AD.events.process_event("admin", event_data)
 
             if self.AD.http is not None:
-                await self.AD.http.terminate_app(name)
+                await self.AD.http.terminate_app(app_name)
 
     async def start_app(self, app_name: str):
         """Initializes a new object and runs the initialize function of the app
@@ -413,7 +414,7 @@ class AppManagement:
     async def stop_app(self, app_name: str, delete: bool = False) -> bool:
         try:
             if isinstance(self.app_config[app_name], AppConfig):
-                self.logger.info("Terminating %s", app_name)
+                self.logger.debug("Stopping app '%s'", app_name)
             await self.terminate_app(app_name, delete)
         except Exception:
             error_logger = logging.getLogger("Error.{}".format(app_name))
@@ -1002,8 +1003,6 @@ class AppManagement:
             module_load_order: List[str] = await utils.run_in_executor(self, self._check_python_files)
 
             affected_apps = self._add_reload_apps(module_load_order)
-            if affected_apps:
-                self.logger.debug("Apps affected by (re)loading modules: %s", affected_apps)
 
             # Refresh app config
             app_actions = await self.check_config()
@@ -1026,14 +1025,7 @@ class AppManagement:
                     self.logger.debug("Removing %s apps because their modules failed to import", len(failed_to_import))
                     affected_apps -= failed_to_import
 
-                dep_graph = self.app_config.reversed_dependency_graph()
-                sub_graph = {app_name: dep_graph[app_name] for app_name in affected_apps}
-                sub_graph = reverse_graph(sub_graph)
-                app_load_order = topo_sort(sub_graph)
-                if app_load_order:
-                    self.logger.debug("Determined app load order: %s", app_load_order)
-                    await self._create_apps(app_load_order)
-                    await self._initialize_apps(app_load_order)
+                await self._start_apps(affected_apps)
 
             self.apps_initialized = True
 
@@ -1170,21 +1162,18 @@ class AppManagement:
         return deleted_modules
 
     def _add_reload_apps(self, load_order: List[str]) -> Set[str]:
-        """Determines which apps needs to be initialized and/or terminated based on which modules will be loaded or reloaded.
-
-        If a module is going to be reloaded, it's app needs to be terminated and re-initialized.
+        """Determines which apps are going to be affected by the modules that will be (re)loaded.
 
         Part of self.check_app_updates sequence
         """
-        # globals
-        # self.module_dependencies[]
-
         # Find apps that need to be initialized because their module is in the list to load
         affected_apps = set(
             app_name
             for app_name, cfg in self.app_config.root.items()
             if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in load_order
         )
+        if affected_apps:
+            self.logger.debug("Apps affected by (re)loading modules: %s", affected_apps)
         return affected_apps
 
     async def _restart_plugin(self, plugin, apps: AppActions):
@@ -1227,13 +1216,25 @@ class AppManagement:
             if name in self.objects  # filters by apps that are already created
         }
         stop_order = topo_sort(app_deps)
-        self.logger.debug("Determined app stop order: %s", stop_order)
+        self.logger.debug("App stop order: %s", stop_order)
 
         for app_name in stop_order:
             if not await self.stop_app(app_name):
                 failed_to_stop.add(app_name)
 
         return failed_to_stop
+
+    async def _start_apps(self, affected_apps: Iterable[str]):
+        dep_graph = self.app_config.reversed_dependency_graph()
+        sub_graph = {app_name: dep_graph[app_name] for app_name in affected_apps}
+        sub_graph = reverse_graph(sub_graph)
+        app_load_order = topo_sort(sub_graph)
+
+        if app_load_order:
+            self.logger.debug("App start order: %s", app_load_order)
+            # TODO combine with self.start_apps
+            await self._create_apps(app_load_order)
+            await self._initialize_apps(app_load_order)
 
     async def _import_modules(self, load_order: List[str]) -> Set[str]:
         """Calls ``self.import_module`` for each module in the list"""
@@ -1300,8 +1301,6 @@ class AppManagement:
                         )
 
     async def _initialize_apps(self, load_order: List[str]):
-        await self.AD.threading.calculate_pin_threads()
-
         # Call initialize() for apps
         for app_name in load_order:
             if not (cfg := self.app_config.root.get(app_name)):
