@@ -20,7 +20,13 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Set, Union
 
 import appdaemon.utils as utils
-from appdaemon.dependency import find_all_dependents, get_dependency_graph, reverse_graph, topo_sort
+from appdaemon.dependency import (
+    find_all_dependents,
+    get_dependency_graph,
+    get_full_module_name,
+    reverse_graph,
+    topo_sort,
+)
 from appdaemon.models.app_config import AllAppConfig, AppConfig, GlobalModule, GlobalModules
 from appdaemon.models.internal.file_check import FileCheck
 
@@ -69,8 +75,15 @@ class ModuleLoad:
 
 @dataclass
 class LoadingActions:
-    load: Set[str] = field(init=False, default_factory=set)
+    init: Set[str] = field(init=False, default_factory=set)
     reload: Set[str] = field(init=False, default_factory=set)
+    stop: Set[str] = field(init=False, default_factory=set)
+
+
+@dataclass
+class UpdateActions:
+    modules: LoadingActions = field(init=False, default_factory=LoadingActions)
+    apps: LoadingActions = field(init=False, default_factory=LoadingActions)
 
 
 @dataclass
@@ -1009,7 +1022,7 @@ class AppManagement:
             affected_apps |= app_actions.apps_to_initialize
             affected_apps |= app_actions.apps_to_terminate
 
-            await self._check_for_deleted_modules(mode, app_actions)
+            # await self._check_for_deleted_modules(mode, app_actions)
 
             await self._restart_plugin(plugin, app_actions)
 
@@ -1124,23 +1137,25 @@ class AppManagement:
                 if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in deleted
             )
 
+        ModuleLoad()
+
         # Get the paths to all the new/modified Python files
         files = self.mtimes_python.new | self.mtimes_python.modified
         if bool(files):
             # Get the dependency graph for those files
             dep_graph = get_dependency_graph(files)
 
-            # Start the set of full module names to load with the keys of the dependency graph
-            to_load = set(dep_graph.keys())
-
             # Update the master dependency graph
             self.module_dependencies.update(dep_graph)
 
             # Reverse the graph so that it maps each module to the other modules that import it
-            reversed_graph = reverse_graph(self.module_dependencies)
+            self.reversed_graph = reverse_graph(self.module_dependencies)
 
-            # Add modules that import any of the new/modified modules to the set of modules to load
-            to_load |= find_all_dependents(to_load, reversed_graph)
+            # Start the set of full module names to load with the keys of the dependency graph
+            to_load = set(dep_graph.keys())
+
+            # Add modules that depend on any of the new/modified modules to the set of modules to load
+            to_load |= find_all_dependents(to_load, self.reversed_graph)
 
             # Get the dependencies of the full set modules to load
             sub_deps = {m: self.module_dependencies[m] for m in to_load}
@@ -1176,14 +1191,21 @@ class AppManagement:
 
         Part of self.check_app_updates sequence
         """
+        deleted_module_names = set(map(get_full_module_name, self.mtimes_python.deleted))
+        deleted_dependants = find_all_dependents(deleted_module_names, self.reversed_graph)
+
+        affected_module_names = set(load_order) | deleted_module_names | deleted_dependants
+
         # Find apps that need to be initialized because their module is in the list to load
         affected_apps = set(
             app_name
             for app_name, cfg in self.app_config.root.items()
-            if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in load_order
+            if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in affected_module_names
         )
+
         if affected_apps:
-            self.logger.debug("Apps affected by (re)loading modules: %s", affected_apps)
+            self.logger.debug("Apps affected by changed files: %s", affected_apps)
+
         return affected_apps
 
     async def _restart_plugin(self, plugin, apps: AppActions):

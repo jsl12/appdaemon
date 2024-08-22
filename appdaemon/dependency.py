@@ -17,7 +17,7 @@ def get_full_module_name(file_path: Path) -> str:
         Full module name, delimited with periods
     """
     file_path = file_path if isinstance(file_path, Path) else Path(file_path)
-    assert file_path.is_file(), f"{file_path} is not a file"
+    # assert file_path.is_file(), f"{file_path} is not a file"
     assert file_path.suffix == ".py", f"{file_path} is not a Python file"
 
     def _gen():
