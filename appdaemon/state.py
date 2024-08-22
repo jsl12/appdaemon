@@ -4,7 +4,7 @@ import uuid
 from copy import copy, deepcopy
 from logging import Logger
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 import appdaemon.utils as utils
 
@@ -571,13 +571,6 @@ class State:
             state["attributes"][attr] = copy(state["attributes"][attr]) + i
             await self.set_state(name, namespace, entity_id, attributes=state["attributes"])
 
-    def set_state_simple(self, namespace, entity_id, state):
-        #
-        # Set state without any checks or triggering amy evernts, and only if the entity exists
-        #
-        if namespace in self.state and entity_id in self.state[namespace]:
-            self.state[namespace][entity_id] = state
-
     async def state_services(self, namespace, domain, service, kwargs):
         self.logger.debug("state_services: %s, %s, %s, %s", namespace, domain, service, kwargs)
         if service in ["add_entity", "remove_entity", "set"]:
@@ -620,7 +613,7 @@ class State:
         else:
             self.logger.warning("Unknown service in state service call: %s", kwargs)
 
-    async def set_state(self, name: str, namespace: str, entity: str, **kwargs):
+    async def set_state(self, name: str, namespace: str, entity: str, _silent: bool = False, **kwargs):
         self.logger.debug("set_state(): %s, %s", entity, kwargs)
         if entity in self.state[namespace]:
             old_state = deepcopy(self.state[namespace][entity])
@@ -631,7 +624,7 @@ class State:
         self.logger.debug("Old state: %s", old_state)
         self.logger.debug("New state: %s", new_state)
 
-        if not self.entity_exists(namespace, entity) and not kwargs.get("_silent", False):
+        if not self.entity_exists(namespace, entity) and not _silent:
             self.logger.info("%s: Entity %s created in namespace: %s", name, entity, namespace)
 
         # Fire the plugin's state update if it has one
@@ -666,6 +659,11 @@ class State:
             self.AD.loop.create_task(self.AD.events.process_event(namespace, data))
 
         return new_state
+
+    def set_state_simple(self, namespace: str, entity_id: str, state: Any):
+        """Set state without any checks or triggering amy events, and only if the entity exists"""
+        if self.entity_exists(namespace, entity_id):
+            self.state[namespace][entity_id] = state
 
     async def set_namespace_state(self, namespace: str, state: Dict, persist: bool = False):
         if persist:
