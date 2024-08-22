@@ -173,8 +173,6 @@ class AppManagement:
     app_config: AllAppConfig = AllAppConfig({})
     """Keeps track of which module and class each app comes from, along with any associated global modules. Gets set at the end of :meth:`~appdaemon.app_management.AppManagement.check_config`.
     """
-    app_config_files: Dict[Path, Set[str]] = {}
-    """Maps paths of app config files (.yaml or .toml) to the list of apps that come from those files"""
 
     active_apps_sensor: str = "sensor.active_apps"
     inactive_apps_sensor: str = "sensor.inactive_apps"
@@ -543,8 +541,11 @@ class AppManagement:
 
         return True
 
-    async def read_all(self, config_files: Iterable[Path]) -> AllAppConfig:
-        async def config_model_factory():
+    @utils.executor_decorator
+    def read_all(self, config_files: Iterable[Path] = None) -> AllAppConfig:
+        config_files = config_files or set(self.mtimes_config.paths)
+
+        def config_model_factory():
             """Creates a generator that sets the config_path of app configs"""
             for path in config_files:
                 rel_path = path.relative_to(self.AD.app_dir.parent)
@@ -555,15 +556,15 @@ class AppManagement:
                     error_text=f"Unexepected error while reading {rel_path}",
                     finally_text=f"{rel_path} read finish",
                 )
-                async def safe_read(self: Self, path: Path):
-                    raw_cfg = await self.read_config_file(path)
+                def safe_read(self: Self, path: Path):
+                    raw_cfg = self.read_config_file(path)
                     config_model = AllAppConfig.model_validate(raw_cfg)
                     for cfg in config_model.root.values():
                         if isinstance(cfg, AppConfig):
                             cfg.config_path = path
                     return config_model
 
-                yield await safe_read(self, path)
+                yield safe_read(self, path)
 
         def update(d1: Dict, d2: Dict) -> Dict:
             """Internal funciton to log warnings if an app's name gets repeated."""
@@ -571,115 +572,10 @@ class AppManagement:
                 self.logger.warning(f"Apps re-defined: {overlap}")
             return d1.update(d2) or d1
 
-        models = [m.model_dump(by_alias=True, exclude_unset=True) async for m in config_model_factory()]
+        models = [m.model_dump(by_alias=True, exclude_unset=True) for m in config_model_factory()]
         combined_configs = reduce(update, models, {})
-        return AllAppConfig.model_validate(combined_configs)
-
-    async def read_full_config(self, config_files: Iterable[Path]) -> Dict[str, Dict[str, Any]]:  # noqa: C901
-        """Reads all the config files with :func:`~.utils.read_config_file`, which reads individual files using the :attr:`~.appdaemon.AppDaemon.executor`.
-
-        Returns:
-            Dict[str, Dict[str, Any]]: Loaded app configuration
-        """
-        new_config = None
-        for path in config_files:
-            valid_apps = {}
-            config = await self.read_config_file(path)
-
-            if not isinstance(config, dict):
-                if self.AD.invalid_config_warnings:
-                    self.logger.warning(
-                        "File '%s' invalid structure, ignoring",
-                        path.relative_to(self.AD.app_dir.parent),
-                    )
-                continue
-
-            for app_name, cfg in config.items():
-                if cfg is None:
-                    if self.AD.invalid_config_warnings:
-                        self.logger.warning(
-                            "App '%s' has null configuration, ignoring",
-                            app_name,
-                        )
-                    continue  # skip to next app
-
-                app_is_valid = True
-                if app_name == "global_modules":
-                    self.logger.warning(
-                        "global_modules directive has been deprecated and will be removed" " in a future release"
-                    )
-                    #
-                    # Check the parameter format for string or list
-                    #
-                    if isinstance(cfg, str):
-                        valid_apps[app_name] = [cfg]
-                    elif isinstance(cfg, list):
-                        valid_apps[app_name] = cfg
-                    else:
-                        if self.AD.invalid_config_warnings:
-                            self.logger.warning(
-                                "global_modules should be a list or a string in file '%s' - ignoring",
-                                path.relative_to(self.AD.app_dir.parent),
-                            )
-                        continue  # skip to next app
-                elif app_name == "sequence":
-                    #
-                    # We don't care what it looks like just pass it through
-                    #
-                    valid_apps[app_name] = cfg
-                elif "." in app_name:
-                    #
-                    # We ignore any app containing a dot.
-                    #
-                    continue
-                elif isinstance(cfg, dict) and "class" in cfg and "module" in cfg:
-                    valid_apps[app_name] = cfg
-                    valid_apps[app_name]["config_path"] = path
-                elif isinstance(cfg, dict) and "module" in cfg and "global" in cfg and cfg["global"] is True:
-                    valid_apps[app_name] = cfg
-                    valid_apps[app_name]["config_path"] = path
-                else:
-                    app_is_valid = False
-                    if self.AD.invalid_config_warnings:
-                        self.logger.warning(
-                            "App '%s' missing 'class' or 'module' entry - ignoring",
-                            app_name,
-                        )
-
-                if app_is_valid:
-                    # now add app to the path
-                    if path not in self.app_config_files:
-                        self.app_config_files[path] = set()
-
-                    self.app_config_files[path].add(app_name)
-
-            if new_config is None:
-                new_config = {}
-            for app_name in valid_apps:
-                if app_name == "global_modules":
-                    if app_name in new_config:
-                        new_config[app_name].extend(valid_apps[app_name])
-                        continue
-                if app_name == "sequence":
-                    if app_name in new_config:
-                        new_config[app_name] = {
-                            **new_config[app_name],
-                            **valid_apps[app_name],
-                        }
-                        continue
-
-                if app_name in new_config:
-                    self.logger.warning(
-                        "File '%s' duplicate app: %s - ignoring",
-                        path.relative_to(self.AD.app_dir.parent),
-                        app_name,
-                    )
-                else:
-                    new_config[app_name] = valid_apps[app_name]
-
-        await self.check_sequence_update(new_config.get("sequence", {}))
-
-        return new_config
+        self.app_config = AllAppConfig.model_validate(combined_configs)
+        return self.app_config
 
     async def check_sequence_update(self, sequence_config):
         if self.app_config.get("sequences", {}) != sequence_config:
@@ -709,29 +605,34 @@ class AppManagement:
             if modified_sequences != {}:
                 await self.AD.sequences.add_sequences(modified_sequences)
 
-    @utils.executor_decorator
-    def check_app_config_files(self):
+    async def check_app_config_files(self):
         """Sets the self.config_file_check attribute to a fresh instance of FileCheck that has been compared to the previous run."""
-        self.mtimes_config.update(self.get_app_config_files())
+        config_files = await self.get_app_config_files()
+        self.mtimes_config.update(config_files)
 
         for file in sorted(self.mtimes_config.new):
-            self.logger.info("Added app config file: %s", file.relative_to(self.AD.app_dir.parent))
-            self.app_config_files[file] = set()
+            self.logger.info("Found app config file: %s", file.relative_to(self.AD.app_dir.parent))
 
         for file in sorted(self.mtimes_config.modified):
-            self.logger.info("Modified app config file: %s", file.relative_to(self.AD.app_dir.parent))
+            self.logger.info("Detected app config file modification: %s", file.relative_to(self.AD.app_dir.parent))
 
         for file in sorted(self.mtimes_config.deleted):
-            self.logger.info("Deleted app config file: %s", file.relative_to(self.AD.app_dir.parent))
-            del self.app_config_files[file]
+            self.logger.info("Detected app config file deletion: %s", file.relative_to(self.AD.app_dir.parent))
 
-    @utils.executor_decorator
-    def read_config_file(self, file: Path) -> Dict[str, Dict]:
+        if self.mtimes_config.there_were_changes:
+            await self.read_all(self.mtimes_config.paths)
+
+    def read_config_file(self, file: Path) -> AllAppConfig:
         """Reads a single YAML or TOML file.
 
         This has to exist as a method of AppManagement for the decorator, which makes it run in the executor, to work properly. It needs access to a `self` argument, that it uses to get the asyncio event loop and executor.
         """
-        return utils.read_config_file(file)
+        raw_cfg = utils.read_config_file(file)
+        config_model = AllAppConfig.model_validate(raw_cfg)
+        for cfg in config_model.root.values():
+            if isinstance(cfg, AppConfig):
+                cfg.config_path = file
+        return config_model
 
     # noinspection PyBroadException
     async def check_config(self, silent: bool = False, add_threads: bool = True) -> Optional[AppActions]:  # noqa: C901
@@ -748,9 +649,8 @@ class AppManagement:
         """
         actions = AppActions()
         try:
-            await self.check_app_config_files()
             if self.mtimes_config.there_were_changes:
-                new_full_config = await self.read_all(self.mtimes_config.paths)
+                new_full_config = self.mtimes_config
 
                 # Check for changes and deletions
                 for app_name, cfg in self.app_config.app_definitions():
@@ -831,8 +731,7 @@ class AppManagement:
             # Now we know if we have any new apps we can create new threads if pinning
             actions.active, inactive, glbl = self.app_config.get_active_app_count()
 
-            # TODO move this part to the Threading subsystem
-            if add_threads and self.AD.threading.auto_pin:
+            if self.AD.threading.auto_pin:
                 if actions.active > self.AD.threading.thread_count:
                     for i in range(actions.active - self.AD.threading.thread_count):
                         await self.AD.threading.add_thread(False, True)
@@ -944,7 +843,10 @@ class AppManagement:
 
             update_actions = UpdateActions()
 
-            await self.check_python_files(update_actions)
+            if mode == UpdateMode.NORMAL:
+                await self.check_python_files(update_actions)
+
+            await self.check_app_config_files()
 
             # Refresh app config
             app_actions = await self.check_config()
@@ -1013,19 +915,20 @@ class AppManagement:
 
     def get_python_files(self) -> Iterable[Path]:
         """Iterates through *.py in the app directory. Excludes directory names defined in exclude_dirs and with a "." character. Also excludes files that aren't readable."""
-        return (
+        return set(
             f
-            for f in Path(self.AD.app_dir).resolve().rglob("*.py")
+            for f in self.AD.app_dir.resolve().rglob("*.py")
             if f.parent.name not in self.AD.exclude_dirs  # apply exclude_dirs
             and "." not in f.parent.name  # also excludes *.egg-info folders
             and os.access(f, os.R_OK)  # skip unreadable files
         )
 
+    @utils.executor_decorator
     def get_app_config_files(self) -> Iterable[Path]:
         """Iterates through config files in the config directory. Excludes directory names defined in exclude_dirs and files with a "." character. Also excludes files that aren't readable."""
-        return (
+        return set(
             f
-            for f in Path(self.AD.app_dir).resolve().rglob(f"*{self.ext}")
+            for f in self.AD.app_dir.resolve().rglob(f"*{self.ext}")
             if f.parent.name not in self.AD.exclude_dirs  # apply exclude_dirs
             and "." not in f.stem
             and os.access(f, os.R_OK)  # skip unreadable files

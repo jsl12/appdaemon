@@ -151,8 +151,10 @@ class Threading:
             self.total_threads = kwargs["total_threads"]
             self.auto_pin = False
         else:
-            apps = await self.AD.app_management.check_config(silent=True, add_threads=False)
-            self.total_threads = apps.active
+            # apps = await self.AD.app_management.check_config(add_threads=False)
+            await self.AD.app_management.check_app_config_files()
+            self.total_threads, _, _ = self.AD.app_management.app_config.get_active_app_count()
+            # self.total_threads = apps.active
 
         if self.pin_apps is True:
             self.pin_threads = self.total_threads
@@ -488,7 +490,7 @@ class Threading:
     # Pinning
     #
 
-    async def add_thread(self, silent=False, pinthread=False, id=None):
+    async def add_thread(self, silent: bool = False, pinthread: bool = False, id: Union[int, str] = None):
         if id is None:
             tid = self.thread_count
         else:
