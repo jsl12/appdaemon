@@ -1,48 +1,82 @@
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set, Union
+from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
 
+from pydantic_core import PydanticUndefinedType
 import yaml
 from pydantic import BaseModel, Field, RootModel, field_validator, model_validator
 
 
 class GlobalModules(RootModel):
-    root: List[str]
+    root: Set[str]
 
 
 class GlobalModule(BaseModel):
     global_: bool = Field(alias="global")
-    module: str
+    module_name: str = Field(alias="module")
+    dependencies: Optional[Set[str]] = None
+
+
+class SequenceStep(RootModel):
+    root: Dict[str, Dict]
+
+
+class SequenceItem(BaseModel):
+    name: str
+    namespace: str = "default"
+    steps: List[SequenceStep]
+
+
+class Sequence(RootModel):
+    root: Dict[str, SequenceItem]
 
 
 class AppConfig(BaseModel, extra="allow"):
     name: str
-    class_name: str = Field(alias="class")
+    config_path: Optional[Path] = None
     module_name: str = Field(alias="module")
-    globals: Optional[Set[str]] = None
+    """Importable module name.
+    """
+    class_name: str = Field(alias="class")
+    """Name of the class to use for the app. Must be accessible as an attribute of the imported `module_name`
+    """
     dependencies: Optional[Set[str]] = None
+    """Other apps that this app depends on. They are guaranteed to be loaded and started before this one.
+    """
+    global_dependencies: Optional[Set[str]] = None
+    """Global modules that this app depends on.
+    """
+    disable: bool = False
+    pin_app: Optional[bool] = None
+    pin_thread: Optional[int] = None
+    log: Optional[str] = None
+    log_level: Optional[str] = None
 
-    @field_validator("dependencies", "globals", mode="before")
+    @field_validator("dependencies", "global_dependencies", mode="before")
     @classmethod
     def coerce_to_list(cls, value: Union[str, Set[str]]) -> Set[str]:
         return set((value,)) if isinstance(value, str) else value
 
 
 class AllAppConfig(RootModel):
-    root: Dict[str, Union[AppConfig, GlobalModule, GlobalModules]]
+    root: Dict[str, Union[AppConfig, GlobalModule, GlobalModules, Sequence]] = {}
 
     @model_validator(mode="before")
     @classmethod
     def set_app_names(cls, values: Dict):
-        for app_name, cfg in values.items():
-            if app_name == "global_modules":
-                values[app_name] = GlobalModules.model_validate(cfg)
-            elif app_name == "sequence":
-                pass
-            elif "global" in cfg:
-                values[app_name] = GlobalModule.model_validate(cfg)
-            else:
-                cfg["name"] = app_name
-        return values
+        if not isinstance(values, PydanticUndefinedType):
+            for app_name, cfg in values.items():
+                if app_name == "global_modules":
+                    values[app_name] = GlobalModules.model_validate(cfg)
+                elif app_name == "sequence":
+                    values[app_name] = Sequence.model_validate(cfg)
+                elif cfg.get("global"):
+                    values[app_name] = GlobalModule.model_validate(cfg)
+                else:
+                    cfg["name"] = app_name
+            return values
+
+    def __getitem__(self, key: str):
+        return self.root[key]
 
     @property
     def __iter__(self):
@@ -50,11 +84,13 @@ class AllAppConfig(RootModel):
 
     @classmethod
     def from_path(cls, path: Path):
+        """Not used, debug only"""
         with path.open("r") as f:
             return cls.model_validate(yaml.safe_load(f))
 
     @classmethod
     def from_paths(cls, paths: Iterable[Path]):
+        """Not used, debug only"""
         paths = iter(paths)
         self = cls.from_path(next(paths))
         for p in paths:
@@ -63,7 +99,28 @@ class AllAppConfig(RootModel):
 
     def depedency_graph(self) -> Dict[str, Set[str]]:
         return {
-            app_config.name: app_config.dependencies
-            for app_config in self.root.values()
-            if isinstance(app_config, AppConfig) and app_config.dependencies is not None
+            app_name: cfg.dependencies
+            for app_name, cfg in self.root.items()
+            if isinstance(cfg, (AppConfig, GlobalModule))
         }
+
+    def app_definitions(self) -> List[Tuple[str, AppConfig]]:
+        return [(app_name, cfg) for app_name, cfg in self.root.items() if isinstance(cfg, AppConfig)]
+
+    @property
+    def app_count(self) -> int:
+        return len([cfg for cfg in self.root.values() if isinstance(cfg, AppConfig)])
+
+    def get_active_app_count(self) -> Tuple[int, int, int]:
+        active = 0
+        inactive = 0
+        glbl = 0
+        for cfg in self.root.values():
+            if isinstance(cfg, AppConfig):
+                if cfg.disable:
+                    inactive += 1
+                else:
+                    active += 1
+            elif isinstance(cfg, GlobalModule):
+                glbl += 1
+        return active, inactive, glbl

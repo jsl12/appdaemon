@@ -168,13 +168,13 @@ class State:
             if "pin" in kwargs:
                 pin_app = kwargs["pin"]
             else:
-                pin_app = self.AD.app_management.objects[name]["pin_app"]
+                pin_app = self.AD.app_management.objects[name].pin_app
 
             if "pin_thread" in kwargs:
                 pin_thread = kwargs["pin_thread"]
                 pin_app = True
             else:
-                pin_thread = self.AD.app_management.objects[name]["pin_thread"]
+                pin_thread = self.AD.app_management.objects[name].pin_thread
 
             #
             # Add the callback
@@ -187,7 +187,7 @@ class State:
                 handle = uuid.uuid4().hex
                 self.AD.callbacks.callbacks[name][handle] = {
                     "name": name,
-                    "id": self.AD.app_management.objects[name]["id"],
+                    "id": self.AD.app_management.objects[name].id,
                     "type": "state",
                     "function": cb,
                     "entity": entity,
@@ -316,7 +316,7 @@ class State:
                     callback["namespace"],
                     callback["entity"],
                     callback["kwargs"].get("attribute", None),
-                    self.sanitize_state_kwargs(self.AD.app_management.objects[name]["object"], callback["kwargs"]),
+                    self.sanitize_state_kwargs(self.AD.app_management.objects[name].object, callback["kwargs"]),
                 )
             else:
                 raise ValueError("Invalid handle: {}".format(handle))

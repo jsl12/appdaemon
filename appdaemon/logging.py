@@ -522,13 +522,13 @@ class Logging:
             if "pin" in kwargs:
                 pin_app = kwargs["pin"]
             else:
-                pin_app = self.AD.app_management.objects[name]["pin_app"]
+                pin_app = self.AD.app_management.objects[name].pin_app
 
             if "pin_thread" in kwargs:
                 pin_thread = kwargs["pin_thread"]
                 pin_app = True
             else:
-                pin_thread = self.AD.app_management.objects[name]["pin_thread"]
+                pin_thread = self.AD.app_management.objects[name].pin_thread
 
             #
             # Add the callback
@@ -547,7 +547,7 @@ class Logging:
                         cb_kwargs["level"] = thislevel
                         self.AD.callbacks.callbacks[name][handle] = {
                             "name": name,
-                            "id": self.AD.app_management.objects[name]["id"],
+                            "id": self.AD.app_management.objects[name].id,
                             "type": "log",
                             "function": cb,
                             "namespace": namespace,
@@ -625,7 +625,7 @@ class Logging:
                                     {
                                         "id": uuid_,
                                         "name": name,
-                                        "objectid": self.AD.app_management.objects[name]["id"],
+                                        "objectid": self.AD.app_management.objects[name].id,
                                         "type": "log",
                                         "function": callback["function"],
                                         "data": data,

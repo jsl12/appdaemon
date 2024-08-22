@@ -115,13 +115,13 @@ class Scheduler:
         if "pin" in kwargs:
             pin_app = kwargs["pin"]
         else:
-            pin_app = self.AD.app_management.objects[name]["pin_app"]
+            pin_app = self.AD.app_management.objects[name].pin_app
 
         if "pin_thread" in kwargs:
             pin_thread = kwargs["pin_thread"]
             pin_app = True
         else:
-            pin_thread = self.AD.app_management.objects[name]["pin_thread"]
+            pin_thread = self.AD.app_management.objects[name].pin_thread
 
         if name not in self.schedule:
             self.schedule[name] = {}
@@ -134,7 +134,7 @@ class Scheduler:
 
         self.schedule[name][handle] = {
             "name": name,
-            "id": self.AD.app_management.objects[name]["id"],
+            "id": self.AD.app_management.objects[name].id,
             "callback": callback,
             "timestamp": ts,
             "interval": interval,
@@ -291,7 +291,7 @@ class Scheduler:
                     {
                         "id": uuid_,
                         "name": name,
-                        "objectid": self.AD.app_management.objects[name]["id"],
+                        "objectid": self.AD.app_management.objects[name].id,
                         "type": "state",
                         "function": args["callback"],
                         "attribute": args["kwargs"]["__attribute"],
@@ -340,7 +340,7 @@ class Scheduler:
                     {
                         "id": uuid_,
                         "name": name,
-                        "objectid": self.AD.app_management.objects[name]["id"],
+                        "objectid": self.AD.app_management.objects[name].id,
                         "type": "scheduler",
                         "function": args["callback"],
                         "pin_app": args["pin_app"],
@@ -691,7 +691,7 @@ class Scheduler:
             return (
                 self.make_naive(callback["timestamp"]),
                 callback["interval"],
-                self.sanitize_timer_kwargs(self.AD.app_management.objects[name]["object"], callback["kwargs"]),
+                self.sanitize_timer_kwargs(self.AD.app_management.objects[name].object, callback["kwargs"]),
             )
         else:
             # self.logger.warning("Invalid timer handle given as: %s", handle)

@@ -15,9 +15,11 @@ from appdaemon import utils
 from appdaemon.appdaemon import AppDaemon
 from appdaemon.entity import Entity
 from appdaemon.logging import Logging
+from appdaemon.models.app_config import AppConfig
 
 
 class ADAPI:
+
     """AppDaemon API class.
 
     This class includes all native API calls to AppDaemon
@@ -30,54 +32,51 @@ class ADAPI:
     name: str
     """The app name, which is set by the top-level key in the YAML file
     """
+    config_model: AppConfig
+    """Pydantic model of the app configuration
+    """
+    config: Dict[str, Any]
+    """Dictionary of the AppDaemon configuration
+    """
+    app_config: Dict[str, Any]
+    """Dictionary of the full app configuration, which includes all apps
+    """
+    args: Dict[str, Any]
+    """Dictionary of this app's configuration
+    """
+
     app_dir: Path
     config_dir: Path
     _logging: Logging
     """Reference to the Logging subsystem object
     """
-    args: Dict[str, Any]
-    """The arguments provided in this app's YAML config file
-    """
 
-    #
-    # Internal parameters
-    #
-    def __init__(
-        self,
-        ad: AppDaemon,
-        name: str,
-        logging_obj: Logging,
-        args: Dict[str, Any],
-        config: Dict[str, Any],
-        app_config,
-        global_vars,
-    ):
-        # Store args
-
+    def __init__(self, ad: AppDaemon, config_model: AppConfig):
         self.AD = ad
-        self.name = name
-        self._logging = logging_obj
-        self.config = config
-        self.app_config = app_config
-        # same as self.AD.app_management.app_config
-        self.args = deepcopy(args)
+        self.config_model = config_model
+
+        self.config = self.AD.config.model_dump(by_alias=True, exclude_unset=True)
+        self.args = self.config_model.model_dump(by_alias=True, exclude_unset=True)
+        self.app_config = self.AD.app_management.app_config.model_dump(by_alias=True, exclude_unset=True)
+
         self.dashboard_dir = None
 
         if self.AD.http is not None:
             self.dashboard_dir = self.AD.http.dashboard_dir
 
-        self.global_vars = global_vars
         self._namespace = "default"
-        self.logger = self._logging.get_child(name)
-        self.err = self._logging.get_error().getChild(name)
+        self.logger = self._logging.get_child(self.name)
+        self.err = self._logging.get_error().getChild(self.name)
+
+        if lvl := config_model.log_level:
+            self.logger.setLevel(lvl)
+            self.err.setLevel(lvl)
+
         self.user_logs = {}
-        if "log_level" in args:
-            self.logger.setLevel(args["log_level"])
-            self.err.setLevel(args["log_level"])
-        if "log" in args:
-            userlog = self.get_user_log(args["log"])
-            if userlog is not None:
-                self.logger = userlog
+        if log_name := config_model.log:
+            if user_log := self.get_user_log(log_name):
+                self.logger = user_log
+
         self.dialogflow_v = 2
 
     @staticmethod
@@ -112,6 +111,18 @@ class ADAPI:
     @property
     def config_dir(self) -> Path:
         return self.AD.config_dir
+
+    @property
+    def global_vars(self):
+        return self.AD.global_vars
+
+    @property
+    def _logging(self) -> Logging:
+        return self.AD.logging
+
+    @property
+    def name(self) -> str:
+        return self.config_model.name
 
     #
     # Logging

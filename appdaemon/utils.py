@@ -810,7 +810,8 @@ def topo_sort(graph: dict[str, set[str]]) -> list[str]:
     def _node_gen():
         for node, edges in graph.items():
             yield node
-            yield from edges
+            if edges:
+                yield from edges
 
     nodes = set(_node_gen())
 
@@ -825,7 +826,8 @@ def topo_sort(graph: dict[str, set[str]]) -> list[str]:
         visited.append(node)
         rec_stack.add(node)
 
-        for adj_node in graph.get(node, set()):
+        adjacent_nodes = graph.get(node) or set()
+        for adj_node in adjacent_nodes:
             visit(adj_node)
 
         rec_stack.remove(node)
