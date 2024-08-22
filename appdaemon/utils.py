@@ -221,16 +221,19 @@ def check_state(logger, new_state, callback_state, name) -> bool:
     return passed
 
 
-def sync_decorator(func):  # no type hints here, so that @wraps(func) works properly
-    @wraps(func)
+def sync_decorator(coro):  # no type hints here, so that @wraps(func) works properly
+    @wraps(coro)
     def wrapper(self, *args, **kwargs):
-        if asyncio.iscoroutinefunction(func):
-            task = asyncio.create_task(func(self, *args, **kwargs))
+        try:
+            asyncio.get_running_loop()
+            task = asyncio.create_task(coro(self, *args, **kwargs))
             futures: Futures = self.AD.futures
             futures.add_future(self.name, task)
             return task
-        else:
-            return run_coroutine_threadsafe(self, func(self, *args, **kwargs))
+        except RuntimeError:
+            # Maybe the async loop is not running yet
+            result = run_coroutine_threadsafe(self, coro(self, *args, **kwargs))
+            return result
 
     return wrapper
 
@@ -380,11 +383,9 @@ async def run_in_executor(self, fn, *args, **kwargs) -> Any:
     Returns:
         Whatever the function returns
     """
-    loop: asyncio.BaseEventLoop = self.AD.loop
-    executor: concurrent.futures.ThreadPoolExecutor = self.AD.executor
+    ad: "AppDaemon" = self.AD
     preloaded_function = functools.partial(fn, *args, **kwargs)
-
-    completed, pending = await asyncio.wait([loop.run_in_executor(executor, preloaded_function)])
+    completed, pending = await asyncio.wait([ad.loop.run_in_executor(ad.executor, preloaded_function)])
     future = list(completed)[0]
     response = future.result()
     return response
