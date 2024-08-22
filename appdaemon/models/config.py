@@ -1,15 +1,17 @@
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Callable, Dict, List, Literal, Optional, Union
 
 import pytz
 from pydantic import BaseModel, ConfigDict, field_validator
 from pytz.tzinfo import DstTzInfo, StaticTzInfo
+from typing_extensions import deprecated
+
 from appdaemon.version import __version__
 
 
-class PluginConfig(BaseModel):
+class PluginConfig(BaseModel, extra="allow"):
     type: str
 
 
@@ -24,7 +26,7 @@ class AppDaemonConfig(BaseModel, extra="forbid"):
     longitude: float
     elevation: int
     time_zone: Union[StaticTzInfo, DstTzInfo]
-    plugins: Dict[str, PluginConfig]
+    plugins: Optional[Dict[str, PluginConfig]] = None
 
     config_dir: Path
     config_file: Path
@@ -64,9 +66,22 @@ class AppDaemonConfig(BaseModel, extra="forbid"):
     namespaces: Dict[str, Dict] = {}
     exclude_dirs: List[str] = []
     cert_verify: bool = True
-    disable_apps: bool = True
+    disable_apps: bool = False
+
+    module_debug: Dict[str, str] = {}
+    pin_apps: bool = True
 
     load_distribution: str = "roundrobbin"
+    threads: Optional[
+        Annotated[
+            int,
+            deprecated(
+                "Threads directive is deprecated apps - will be pinned. Use total_threads if you want to unpin your apps"
+            ),
+        ]
+    ] = None
+    total_threads: Optional[int] = None
+    pin_threads: Optional[int] = None
     thread_duration_warning_threshold: float = 10
     threadpool_workers: int = 10
 

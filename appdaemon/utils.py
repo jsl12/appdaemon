@@ -16,18 +16,19 @@ import shelve
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Iterable
 from datetime import timedelta
 from functools import wraps
 from pathlib import Path
-import traceback
 from types import ModuleType
-from typing import Any, Dict, Type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Type
 
 import dateutil.parser
 import tomli
 import tomli_w
 import yaml
+from pydantic import ValidationError
 
 from appdaemon.futures import Futures
 from appdaemon.version import __version__  # noqa: F401
@@ -327,15 +328,17 @@ def warning_decorator(
                     self.logger.debug(start_text)
 
                 result = func(self, *args, **kwargs)
-
-            except Exception:
+            except Exception as e:
                 error_logger = self.error
                 error_logger.warning("-" * 60)
                 nonlocal error_text
                 error_text = error_text or f"Unexpected error running {func.__qualname__}"
                 error_logger.warning(error_text)
                 error_logger.warning("-" * 60)
-                error_logger.warning(traceback.format_exc())
+                if isinstance(e, ValidationError):
+                    error_logger.warning(e)
+                else:
+                    error_logger.warning(traceback.format_exc())
                 error_logger.warning("-" * 60)
             else:
                 if success_text:

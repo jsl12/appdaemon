@@ -118,13 +118,11 @@ class HTTP:
     stopping: bool
     executor: concurrent.futures.ThreadPoolExecutor
 
-    def __init__(self, ad: "AppDaemon", loop, logging, appdaemon, dashboard, old_admin, admin, api, http):
+    def __init__(self, ad: "AppDaemon", dashboard, old_admin, admin, api, http):
         self.AD = ad
-        self.logging = logging
-        self.logger = ad.logging.get_child("_http")
-        self.access = ad.logging.get_access()
+        self.logger = self.logging.get_child("_http")
+        self.access = self.logging.get_access()
 
-        self.appdaemon = appdaemon
         self.dashboard = dashboard
         self.dashboard_dir = None
         self.old_admin = old_admin
@@ -193,7 +191,6 @@ class HTTP:
 
             self.stream = stream.ADStream(self.AD, self.app, self.transport)
 
-            self.loop = loop
             self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
             if self.ssl_certificate is not None and self.ssl_key is not None:
@@ -236,7 +233,7 @@ class HTTP:
             if old_admin is not None or admin is not None:
                 self.admin_obj = adadmin.Admin(
                     self.config_dir,
-                    logging,
+                    self.logging,
                     self.AD,
                     javascript_dir=self.javascript_dir,
                     template_dir=self.template_dir,
@@ -270,7 +267,7 @@ class HTTP:
             # loop.create_task(f)
 
             if self.dashboard_obj is not None:
-                loop.create_task(self.update_rss())
+                self.loop.create_task(self.update_rss())
 
         except Exception:
             self.logger.warning("-" * 60)
@@ -278,6 +275,14 @@ class HTTP:
             self.logger.warning("-" * 60)
             self.logger.warning(traceback.format_exc())
             self.logger.warning("-" * 60)
+
+    @property
+    def logging(self):
+        return self.AD.logging
+
+    @property
+    def loop(self):
+        return self.AD.loop
 
     def _process_dashboard(self, dashboard):
         self.logger.info("Starting Dashboards")

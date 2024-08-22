@@ -41,7 +41,6 @@ class Threading:
     last_stats_time: datetime.datetime = datetime.datetime.fromtimestamp(0)
     callback_list: List[Dict]
 
-    pin_apps: bool
     auto_pin: bool = True
     pin_threads: int = 0
     total_threads: int = 0
@@ -50,14 +49,12 @@ class Threading:
     current_callbacks_executed: int = 0
     current_callbacks_fired: int = 0
 
-    def __init__(self, ad: "AppDaemon", kwargs):
+    def __init__(self, ad: "AppDaemon"):
         self.AD = ad
-        self.kwargs = kwargs
-
         self.logger = ad.logging.get_child("_threading")
         self.diag = ad.logging.get_diag()
-        self.thread_count = 0
 
+        self.thread_count = 0
         self.threads = {}
 
         # A few shortcuts
@@ -67,8 +64,19 @@ class Threading:
         self.add_to_state = ad.state.add_to_state
         self.add_to_attr = ad.state.add_to_attr
 
-        self.pin_apps = kwargs.get("pin_apps", True)
         self.callback_list = []
+
+    @property
+    def pin_apps(self):
+        return self.AD.config.pin_apps
+
+    @property
+    def total_threads(self):
+        return self.AD.config.total_threads
+
+    @total_threads.setter
+    def total_threads(self, new: int):
+        self.AD.config.total_threads = new
 
     async def get_q_update(self):
         """Updates queue sizes"""
@@ -140,31 +148,18 @@ class Threading:
         )
 
     async def create_initial_threads(self):
-        kwargs = self.kwargs
-
-        if "threads" in kwargs:
-            self.logger.warning(
-                "Threads directive is deprecated apps - will be pinned. Use total_threads if you want to unpin your apps"
-            )
-
-        if "total_threads" in kwargs:
-            self.total_threads = kwargs["total_threads"]
+        if self.total_threads:
             self.auto_pin = False
         else:
-            # apps = await self.AD.app_management.check_config(add_threads=False)
             await self.AD.app_management.check_app_config_files()
             self.total_threads, _, _ = self.AD.app_management.app_config.get_active_app_count()
-            # self.total_threads = apps.active
 
-        if self.pin_apps is True:
-            self.pin_threads = self.total_threads
+        if self.pin_apps:
+            self.pin_threads = self.pin_threads or self.total_threads
         else:
             self.auto_pin = False
             self.pin_threads = 0
-            if "total_threads" not in kwargs:
-                self.total_threads = 10
-
-        utils.process_arg(self, "pin_threads", kwargs, int=True)
+            self.total_threads = self.total_threads or 10
 
         if self.pin_threads > self.total_threads:
             raise ValueError("pin_threads cannot be > total_threads")
@@ -181,7 +176,7 @@ class Threading:
         self.next_thread = self.pin_threads
 
         self.thread_count = 0
-        for i in range(self.total_threads):
+        for _ in range(self.total_threads):
             await self.add_thread(True)
 
         # Add thread object to track async

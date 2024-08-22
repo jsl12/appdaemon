@@ -10,22 +10,23 @@ also creates the loop and kicks everything off
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import platform
 import signal
 import sys
 from pathlib import Path
-from typing import Any, Dict
 
-from pydantic import ValidationError
 import pytz
+from pydantic import ValidationError
 
 import appdaemon.appdaemon as ad
 import appdaemon.utils as utils
 from appdaemon.app_management import UpdateMode
 from appdaemon.http import HTTP
 from appdaemon.logging import Logging
+from appdaemon.models.config import AppDaemonConfig
 
 try:
     import pid
@@ -110,25 +111,21 @@ class ADMain:
             self.http_object.stop()
 
     # noinspection PyBroadException,PyBroadException
-    def run(self, ad_kwargs: Dict[str, Any], hadashboard, admin, aui, api, http):
+    def run(self, ad_config_model: AppDaemonConfig, hadashboard, admin, aui, api, http):
         """Start AppDaemon up after initial argument parsing.
 
         Args:
-            appdaemon: Config for AppDaemon Object.
+            ad_config_model: Config for AppDaemon Object.
             hadashboard: Config for HADashboard Object.
             admin: Config for admin Object.
             aui: Config for aui Object.
             api: Config for API Object
             http: Config for HTTP Object
-
-        Returns:
-            None.
-
         """
 
         try:
             # if to use uvloop
-            if ad_kwargs.get("uvloop", False) and uvloop:
+            if ad_config_model.uvloop and uvloop:
                 self.logger.info("Running AD using uvloop")
                 uvloop.install()
 
@@ -136,7 +133,7 @@ class ADMain:
 
             # Initialize AppDaemon
 
-            self.AD = ad.AppDaemon(self.logging, loop, **ad_kwargs)
+            self.AD = ad.AppDaemon(self.logging, loop, ad_config_model)
 
             # Initialize Dashboard/API/admin
 
@@ -146,9 +143,6 @@ class ADMain:
                 self.logger.info("Initializing HTTP")
                 self.http_object = HTTP(
                     self.AD,
-                    loop,
-                    self.logging,
-                    ad_kwargs,
                     hadashboard,
                     admin,
                     aui,
@@ -205,14 +199,12 @@ class ADMain:
             "--config",
             help="full path to config directory",
             type=str,
-            default=None,
         )
         parser.add_argument("-p", "--pidfile", help="full path to PID File", default=None)
         parser.add_argument(
             "-t",
             "--timewarp",
             help="speed that the scheduler will work at for time travel",
-            default=1,
             type=float,
         )
         parser.add_argument(
@@ -226,14 +218,12 @@ class ADMain:
             "--endtime",
             help="end time for scheduler <YYYY-MM-DD HH:MM:SS|YYYY-MM-DD#HH:MM:SS>",
             type=str,
-            default=None,
         )
         parser.add_argument(
             "-C",
             "--configfile",
             help="name for config file",
             type=str,
-            default=None,
         )
         parser.add_argument(
             "-D",
@@ -265,6 +255,7 @@ class ADMain:
             config_file = (
                 Path(args.configfile) if args.configfile is not None else utils.find_path(default_config_filename)
             ).resolve()
+            config_dir = config_file.parent
         else:
             config_dir = Path(args.config).resolve()
             config_file = config_dir / (args.configfile if args.configfile is not None else default_config_filename)
@@ -273,36 +264,42 @@ class ADMain:
         assert os.access(config_file, os.R_OK), f"{config_file} is not readable"
         try:
             config = utils.read_config_file(config_file)
+            ad_kwargs = config["appdaemon"]
+
+            ad_kwargs["config_dir"] = config_dir
+            ad_kwargs["config_file"] = config_file
+            ad_kwargs["use_toml"] = args.toml
+
+            if args.timewarp:
+                ad_kwargs["timewarp"] = args.timewarp
+            if args.starttime:
+                ad_kwargs["starttime"] = args.starttime
+            if args.endtime:
+                ad_kwargs["endtime"] = args.endtime
+
+            ad_kwargs["stop_function"] = self.stop
+            ad_kwargs["loglevel"] = args.debug
+
+            if module_debug:
+                if isinstance(module_debug, dict):
+                    ad_kwargs["module_debug"].update(module_debug)
+                else:
+                    ad_kwargs["module_debug"] = module_debug
+
+            # Validate the AppDaemon configuration
+            ad_config_model = AppDaemonConfig.model_validate(ad_kwargs)
+
+            if args.debug.upper() == "DEBUG":
+                model_json = ad_config_model.model_dump(by_alias=True, exclude_unset=True)
+                print(json.dumps(model_json, indent=4, default=str, sort_keys=True))
+        except ValidationError as e:
+            print(f"Configuration error in: {config_file}")
+            print(e)
+            sys.exit(1)
         except Exception as e:
             print(f"Unexpected error loading config file: {config_file}")
             print(e)
             sys.exit(1)
-
-        if "appdaemon" not in config:
-            print("ERROR", "no 'appdaemon' section in {}".format(config_file))
-            sys.exit(1)
-
-        ad_kwargs = config["appdaemon"]
-        if "disable_apps" not in ad_kwargs:
-            ad_kwargs["disable_apps"] = False
-
-        ad_kwargs["use_toml"] = args.toml
-        ad_kwargs["config_dir"] = config_dir
-        ad_kwargs["config_file"] = config_file
-        ad_kwargs["module_debug"] = module_debug
-
-        if args.starttime is not None:
-            ad_kwargs["starttime"] = args.starttime
-
-        if args.endtime is not None:
-            ad_kwargs["endtime"] = args.endtime
-
-        if "timewarp" not in ad_kwargs:
-            ad_kwargs["timewarp"] = args.timewarp
-
-        ad_kwargs["loglevel"] = args.debug
-
-        ad_kwargs["stop_function"] = self.stop
 
         hadashboard = None
         if "hadashboard" in config:
@@ -403,11 +400,11 @@ class ADMain:
             name = os.path.basename(pidfile)
             try:
                 with pid.PidFile(name, dir):
-                    self.run(ad_kwargs, hadashboard, old_admin, admin, api, http)
+                    self.run(ad_config_model, hadashboard, old_admin, admin, api, http)
             except pid.PidFileError:
                 self.logger.error("Unable to acquire pidfile - terminating")
         else:
-            self.run(ad_kwargs, hadashboard, old_admin, admin, api, http)
+            self.run(ad_config_model, hadashboard, old_admin, admin, api, http)
 
 
 def main():

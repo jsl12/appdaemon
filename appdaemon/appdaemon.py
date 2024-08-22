@@ -114,12 +114,12 @@ class AppDaemon:
     # shut down flag
     stopping: bool = False
 
-    def __init__(self, logging: "Logging", loop: BaseEventLoop, **kwargs):
+    def __init__(self, logging: "Logging", loop: BaseEventLoop, ad_config_model: AppDaemonConfig):
         self.logging = logging
         self.logging.register_ad(self)
         self.logger = logging.get_logger()
         self.loop = loop
-        self.config = AppDaemonConfig.model_validate(kwargs)
+        self.config = ad_config_model
         self.booted = "booting"
 
         self.global_vars = {}
@@ -154,7 +154,7 @@ class AppDaemon:
                 ), f"{self.app_dir} does not have the right permissions"
 
             self.app_management = AppManagement(self)
-            self.threading = Threading(self, kwargs)
+            self.threading = Threading(self)
 
             # Create ThreadAsync loop
             self.logger.debug("Starting thread_async loop")
@@ -164,7 +164,7 @@ class AppDaemon:
         self.executor = ThreadPoolExecutor(max_workers=self.threadpool_workers)
 
         # Initialize Plugins
-        args = kwargs.get("plugins", None)
+        args = self.config.model_dump(by_alias=True)["plugins"]
         self.plugins = Plugins(self, args)
 
         # Create utility loop
