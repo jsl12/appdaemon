@@ -16,7 +16,6 @@ from enum import Enum
 from functools import reduce, wraps
 from logging import Logger
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Set, Union
 
 import appdaemon.utils as utils
@@ -140,14 +139,8 @@ class AppManagement:
     error: Logger
     """Standard python logger named ``Error``
     """
-    monitored_files: Dict[Union[str, Path], float]
-    """Dictionary of the Python files that are being watched for changes and their last modified times
-    """
     filter_files: Dict[str, float]
     """Dictionary of the modified times of the filter files and their paths.
-    """
-    modules: Dict[str, ModuleType] = {}
-    """Dictionary of the loaded modules and their names
     """
     objects: Dict[str, ManagedObject]
     """Dictionary of dictionaries with the instantiated apps, plugins, and sequences along with some metadata. Gets populated by
@@ -158,22 +151,31 @@ class AppManagement:
     """
     active_apps: List[str]
     inactive_apps: List[str]
-    non_apps: List[str]
+    non_apps: Set[str] = {"global_modules", "sequence"}
     apps_initialized: bool = False
     check_app_updates_profile_stats: str = ""
     check_updates_lock: asyncio.Lock = asyncio.Lock()
 
-    mod_pkg_map: Dict[Path, str] = {}
-    """Maps python files to package names
-    """
-    paths_to_modules: Dict[Path, Set[str]] = {}
-    """Maps paths of Python files to the importable names of modules they depend on
-    """
+    # mod_pkg_map: Dict[Path, str] = {}
+    # """Maps python files to package names
+    # """
+    # paths_to_modules: Dict[Path, Set[str]] = {}
+    # """Maps paths of Python files to the importable names of modules they depend on
+    # """
 
     mtimes_config: FileCheck = FileCheck()
+    """Keeps track of the new, modified, and deleted app configuration files
+    """
     mtimes_python: FileCheck = FileCheck()
+    """Keeps track of the new, modified, and deleted Python files
+    """
 
     module_dependencies: Dict[str, Set[str]] = {}
+    """Dictionary that maps full module names to sets of those that they depend on
+    """
+    reversed_graph: Dict[str, Set[str]] = {}
+    """Dictionary that maps full module names to sets of those that depend on them
+    """
 
     app_config: AllAppConfig = AllAppConfig({})
     """Keeps track of which module and class each app comes from, along with any associated global modules. Gets set at the end of :meth:`~appdaemon.app_management.AppManagement.check_config`.
@@ -191,12 +193,8 @@ class AppManagement:
         self.logger = ad.logging.get_child("_app_management")
         self.error = ad.logging.get_error()
         self.diag = ad.logging.get_diag()
-        self.monitored_files = {}
         self.filter_files = {}
         self.objects = {}
-
-        # Initialize config file tracking
-        self.module_dirs = []
 
         # Keeps track of the name of the module and class to load for each app name
         self.global_module_dependencies = {}
@@ -219,7 +217,6 @@ class AppManagement:
 
         self.active_apps = []
         self.inactive_apps = []
-        self.non_apps = ["global_modules", "sequence"]
 
         if self.AD.check_app_updates_profile:
             self.check_app_updates = self.profiler_decorator(self.check_app_updates)
@@ -956,7 +953,6 @@ class AppManagement:
         path = str(path)
         self.logger.info("Adding directory to import path: %s", path)
         sys.path.insert(0, path)
-        self.module_dirs.append(path)
 
     def profiler_decorator(self, func: Coroutine):
         @wraps(func)
@@ -1006,8 +1002,7 @@ class AppManagement:
             update_actions.apps.term |= app_actions.apps_to_terminate
 
             if mode == UpdateMode.TERMINATE:
-                update_actions.apps = LoadingActions(term=self.app_config.app_names())
-                update_actions.modules = LoadingActions()
+                update_actions = UpdateActions(apps=LoadingActions(term=self.app_config.app_names()))
             else:
                 self._add_reload_apps(update_actions)
                 self._check_for_deleted_modules(update_actions)
@@ -1036,10 +1031,10 @@ class AppManagement:
         # Get the parent directories so the ones with __init__.py are importable
         package_parents = set(p.parent for p in top_packages_dirs)
 
-        # keeps track of which modules go to which packages
-        self.mod_pkg_map: Dict[Path, str] = {
-            module_file: dir.stem for dir in top_packages_dirs for module_file in dir.rglob("*.py")
-        }
+        # # keeps track of which modules go to which packages
+        # self.mod_pkg_map: Dict[Path, str] = {
+        #     module_file: dir.stem for dir in top_packages_dirs for module_file in dir.rglob("*.py")
+        # }
 
         # self.paths_to_modules = paths_to_modules(self.AD.app_dir)
         # self.module_dependencies = {path: get_file_deps(path) for path in self.paths_to_modules.keys()}
@@ -1153,11 +1148,13 @@ class AppManagement:
         Part of self.check_app_updates sequence
         """
         module_load_order = update_actions.modules.init_sort(self.module_dependencies)
-        update_actions.apps.reload = set(
-            app_name
-            for app_name, cfg in self.app_config.root.items()
-            if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in module_load_order
-        )
+
+        for app_name, cfg in self.app_config.root.items():
+            if isinstance(cfg, (AppConfig, GlobalModule)):
+                if cfg.module_name in update_actions.modules.init:
+                    update_actions.apps.init.add(app_name)
+                elif cfg.module_name in module_load_order:
+                    update_actions.apps.reload.add(app_name)
 
         if load_apps := (update_actions.apps.init | update_actions.apps.reload):
             self.logger.debug("Apps to be loaded: %s", load_apps)
@@ -1196,15 +1193,6 @@ class AppManagement:
         if stop_order:
             self.logger.debug("App stop order: %s", stop_order)
 
-        # dep_graph = self.app_config.depedency_graph()
-        # rev_graph = reverse_graph(dep_graph)
-        # app_deps = {
-        #     name: rev_graph[name]
-        #     for name in app_names
-        #     if name in self.objects  # filters by apps that are already created
-        # }
-        # stop_order = topo_sort(app_deps)
-
         failed_to_stop = set()  # stores apps that had a problem terminating
         for app_name in stop_order:
             if not await self.stop_app(app_name):
@@ -1216,11 +1204,6 @@ class AppManagement:
             update_actions.apps.reload -= failed_to_stop
 
     async def _start_apps(self, update_actions: UpdateActions):
-        # dep_graph = self.app_config.reversed_dependency_graph()
-        # sub_graph = {app_name: dep_graph[app_name] for app_name in affected_apps}
-        # sub_graph = reverse_graph(sub_graph)
-        # app_load_order = topo_sort(sub_graph)
-
         app_load_order = update_actions.apps.init_sort(self.app_config.depedency_graph())
         if app_load_order:
             self.logger.debug("App start order: %s", app_load_order)
@@ -1295,9 +1278,8 @@ class AppManagement:
                             self.AD.logging.get_filename("error_log"),
                         )
 
-    async def _initialize_apps(self, load_order: List[str]):
-        # Call initialize() for apps
-        for app_name in load_order:
+    async def _initialize_apps(self, start_order: List[str]):
+        for app_name in start_order:
             if not (cfg := self.app_config.root.get(app_name)):
                 self.logger.warning(f"Dependency not found: {app_name}")
                 continue
@@ -1308,47 +1290,7 @@ class AppManagement:
                 self.logger.debug("Skipping initialize for '%s' because it's a global module", app_name)
                 continue
             else:
-                # await self.initialize_app(app_name)
-                if app_name not in self.objects:
-                    module_name = self.app_config.root[app_name].module_name
-                    self.logger.warning(
-                        "Skipping initialize - unable to find module '%s' for app '%s'", module_name, app_name
-                    )
-                    await self.increase_inactive_apps(app_name)
-                    continue
-                elif (init_func := getattr(self.objects[app_name].object, "initialize", None)) is None:
-                    self.logger.warning("Skipping initialize - no initialize() method for app '%s'", app_name)
-                    await self.increase_inactive_apps(app_name)
-                    self.objects[app_name].running = False
-                    continue
-
-                # Call its initialize function
-                try:
-                    self.logger.info(f"Calling initialize() for {app_name}")
-                    if asyncio.iscoroutinefunction(init_func):
-                        await init_func()
-                    else:
-                        await utils.run_in_executor(self, init_func)
-                    await self.set_state(app_name, state="idle")
-                    await self.increase_active_apps(app_name)
-
-                    event_data = {"event_type": "app_initialized", "data": {"app": app_name}}
-
-                    await self.AD.events.process_event("admin", event_data)
-
-                except TypeError:
-                    self.AD.threading.report_callback_sig(app_name, "initialize", init_func, {})
-                except Exception:
-                    error_logger = logging.getLogger("Error.{}".format(app_name))
-                    error_logger.warning("-" * 60)
-                    error_logger.warning("Unexpected error running initialize() for %s", app_name)
-                    error_logger.warning("-" * 60)
-                    error_logger.warning(traceback.format_exc())
-                    error_logger.warning("-" * 60)
-                    if self.AD.logging.separate_error_log() is True:
-                        self.logger.warning("Logged an error to %s", self.AD.logging.get_filename("error_log"))
-                    await self.set_state(app_name, state="initialize_error")
-                    await self.increase_inactive_apps(app_name)
+                await self.initialize_app(app_name)
 
     def apps_per_module(self, module_name: str) -> Set[str]:
         """Finds which apps came from a given module name.
