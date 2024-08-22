@@ -1113,11 +1113,11 @@ class AppManagement:
             self.logger.debug("=" * 50)
 
         if new := self.mtimes_python.new:
-            self.logger.debug("New Python files: %s", len(new))
+            self.logger.info("New Python files: %s", len(new))
         if mod := self.mtimes_python.modified:
-            self.logger.debug("Modified Python files: %s", len(mod))
+            self.logger.info("Modified Python files: %s", len(mod))
         if deleted := self.mtimes_python.deleted:
-            self.logger.debug("Deleted Python files: %s", len(deleted))
+            self.logger.info("Deleted Python files: %s", len(deleted))
             set(
                 app_name
                 for app_name, cfg in self.app_config.root.items()
