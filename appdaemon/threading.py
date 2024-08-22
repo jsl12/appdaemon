@@ -497,17 +497,16 @@ class Threading:
             self.logger.info("Adding thread %s", tid)
         t = threading.Thread(target=self.worker)
         t.daemon = True
-        name = "thread-{}".format(tid)
-        t.setName(name)
+        t.name = f"thread-{tid}"
         if id is None:
             await self.add_entity(
                 "admin",
-                "thread.{}".format(name),
+                "thread.{}".format(t.name),
                 "idle",
                 {"q": 0, "is_alive": True, "time_called": utils.dt_to_str(datetime.datetime(1970, 1, 1, 0, 0, 0, 0))},
             )
-            self.threads[name] = {}
-            self.threads[name]["queue"] = Queue(maxsize=0)
+            self.threads[t.name] = {}
+            self.threads[t.name]["queue"] = Queue(maxsize=0)
             t.start()
             self.thread_count += 1
             if pinthread is True:
@@ -516,12 +515,12 @@ class Threading:
             await self.set_state(
                 "_threading",
                 "admin",
-                "thread.{}".format(name),
+                "thread.{}".format(t.name),
                 state="idle",
                 is_alive=True,
             )
 
-        self.threads[name]["thread"] = t
+        self.threads[t.name]["thread"] = t
 
     async def calculate_pin_threads(self):
         if self.pin_threads == 0:
