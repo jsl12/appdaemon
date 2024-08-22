@@ -476,11 +476,11 @@ class AppManagement:
 
         try:
             app_class = getattr(mod_obj, class_name)
-        except AttributeError:
+        except AttributeError as e:
             await self.increase_inactive_apps(app_name)
             raise AppClassNotFound(
-                f"Unable to find '{class_name}' in {mod_obj.__name__} as defined in app '{app_name}'"
-            )
+                f"Unable to find '{class_name}' in module '{mod_obj.__name__}' as defined in app '{app_name}'"
+            ) from e
 
         if utils.count_positional_arguments(app_class) != 3:
             raise AppClassSignatureError(
@@ -567,16 +567,17 @@ class AppManagement:
 
                 new_cfg: AllAppConfig = await safe_read(self, path)
                 for name, cfg in new_cfg.root.items():
-                    await self.add_entity(
-                        name,
-                        state="loaded",
-                        attributes={
-                            "totalcallbacks": 0,
-                            "instancecallbacks": 0,
-                            "args": cfg.args,
-                            "config_path": cfg.config_path,
-                        },
-                    )
+                    if isinstance(cfg, AppConfig):
+                        await self.add_entity(
+                            name,
+                            state="loaded",
+                            attributes={
+                                "totalcallbacks": 0,
+                                "instancecallbacks": 0,
+                                "args": cfg.args,
+                                "config_path": cfg.config_path,
+                            },
+                        )
                 yield new_cfg
 
         def update(d1: Dict, d2: Dict) -> Dict:
@@ -753,7 +754,7 @@ class AppManagement:
         return wrapper
 
     # @utils.timeit
-    async def check_app_updates(self, plugin: str = None, mode: UpdateMode = UpdateMode.NORMAL):  # noqa: C901
+    async def check_app_updates(self, plugin: str = None, mode: UpdateMode = UpdateMode.NORMAL):
         """Checks the states of the Python files that define the apps, reloading when necessary.
 
         Called as part of :meth:`.utility_loop.Utility.loop`
@@ -775,12 +776,11 @@ class AppManagement:
 
             await self.check_app_config_files(update_actions)
 
-            if mode == UpdateMode.NORMAL:
-                try:
-                    await self.check_app_python_files(update_actions)
-                except DependencyResolutionFail as e:
-                    self.logger.error(f"Error reading python files: {utils.format_exception(e.base_exception)}")
-                    return
+            try:
+                await self.check_app_python_files(update_actions)
+            except DependencyResolutionFail as e:
+                self.logger.error(f"Error reading python files: {utils.format_exception(e.base_exception)}")
+                return
 
             if mode == UpdateMode.TERMINATE:
                 update_actions.modules = LoadingActions()
@@ -796,8 +796,6 @@ class AppManagement:
             await self._import_modules(update_actions)
 
             await self._start_apps(update_actions)
-
-            self.apps_initialized = True
 
     @utils.executor_decorator
     def _process_import_paths(self):
@@ -1056,6 +1054,7 @@ class AppManagement:
                 continue
             else:
                 await self.initialize_app(app_name)
+        self.apps_initialized = True
 
     def apps_per_module(self, module_name: str) -> Set[str]:
         """Finds which apps came from a given module name.
