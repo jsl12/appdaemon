@@ -1,6 +1,6 @@
 import ast
 from pathlib import Path
-from typing import Dict, Iterator, List, Mapping, Set, Tuple, Iterable
+from typing import Dict, Set, Iterable
 
 import logging
 
@@ -41,7 +41,8 @@ def resolve_relative_import(node: ast.ImportFrom, path: Path):
     parts = full_module_name.split(".")
 
     if node.module:
-        parts = parts[: -node.level + 1]
+        # if the node.level is one, then it makes the parts list empty, which is not what we want
+        parts = parts[: -node.level + 1] or parts
         parts.append(node.module)
     else:
         for _ in range(node.level - 1):
@@ -74,10 +75,13 @@ def get_file_deps(file_path: Path) -> Set[str]:
                 yield from (alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
                 if node.level:
-                    rel_module = resolve_relative_import(node, file_path)
-                    yield rel_module
+                    abs_module = resolve_relative_import(node, file_path)
+                    yield abs_module
                 else:
                     yield node.module
+
+        # if (pkg_init := file_path.with_name('__init__.py')).exists() and file_path != pkg_init:
+        #     yield get_full_module_name(pkg_init)
 
     return set(gen_modules())
 
@@ -92,97 +96,7 @@ def get_dependency_graph(files: Iterable[Path]):
     return graph
 
 
-def path_mod_gen(base: Path, pkg_root: Path = None) -> Iterator[Tuple[Path, str]]:
-    """Recurse through the base directory and find the importable module name for each of the python files.
-
-    Args:
-        base (Path): Base directory to recurse through
-        pkg_root (Path, optional): Root directory of the package.
-
-    Yields:
-        Iterator[Tuple[Path, str]]: Path of a Python file and the name of the module that would have to be reloaded when it changes.
-    """
-    inside_pkg = (base / "__init__.py").exists()
-
-    for item in base.iterdir():
-        if inside_pkg and pkg_root is None:
-            pkg_root = base
-
-        if item.is_dir():
-            yield from path_mod_gen(item, pkg_root)
-
-        elif item.is_file() and item.suffix == ".py":
-            if pkg_root is None:
-                yield item, item.stem
-            else:
-                relative_path = item.parent.relative_to(pkg_root.parent)
-                sub_pkg = ".".join(relative_path.parts)
-                if item.name != "__init__.py":
-                    sub_pkg += f".{item.stem}"
-                yield item, sub_pkg
-
-
-def paths_to_modules(base: Path) -> Dict[Path, Set[str]]:
-    """Recurse through the base directory and find the importable module name for each of the python files.
-
-    Args:
-        base (Path): Base directory to recurse through
-
-    """
-    return {p: pkg for p, pkg in path_mod_gen(base)}
-
-
-def changed_reload_order(
-    changed_files: Iterable[Path],
-    files_to_modules: Mapping[Path, str],
-    dependency_graph: Mapping[Path, Set[str]],
-) -> List[str]:
-    """Reloads Python packages based on what Python files have changed.
-
-    Args:
-        changed_files (Iterable[Path]): Iterable of Path objects to the changed files
-        file_mod_map (Mapping[Path, str]): Mapping of Paths to Python files and the module name that would import them
-        module_deps: (Mapping[Path, Set[str]]): Mapping of Paths to Python files and the set of importable module names they depend on
-    """
-    for changed in changed_files:
-        if changed not in files_to_modules:
-            logger.warning(f"{changed} not in mapping")
-
-    # find package dependency graph based on changed files
-    changed_deps = {files_to_modules[f]: get_file_deps(f) for f in changed_files}
-
-    changed_deps = {
-        files_to_modules[f]: set(
-            files_to_modules[p] for p, deps in dependency_graph.items() if files_to_modules[f] in deps
-        )
-        for f in changed_files
-    }
-
-    # changed_modules = list((file_mod_map[f], module_deps[f]) for f in changed_files)
-
-    # remove the own package for init files
-    changed_deps = {pkg: set(d for d in deps if d != pkg) for pkg, deps in changed_deps.items()}
-
-    # (re)load in topo order
-    load_order = topo_sort(changed_deps)
-    return load_order
-
-    # for pkg in load_order:
-    #     if mod := sys.modules.get(pkg):
-    #         try:
-    #             Path(mod.__file__).relative_to(app_dir)
-    #         except ValueError:
-    #             logger.debug(f'Skipping {mod.__name__}')
-    #             continue
-    #         else:
-    #             mod = importlib.reload(mod)
-    #             logger.debug(f'Reloaded {pkg}')
-    #     else:
-    #         mod = importlib.import_module(pkg)
-    #         print(f'Imported {pkg}')
-
-
-Graph = Mapping[str, Set[str]]
+Graph = Dict[str, Set[str]]
 
 
 def get_all_nodes(deps: Graph) -> Set[str]:

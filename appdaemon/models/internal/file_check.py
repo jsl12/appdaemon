@@ -41,6 +41,8 @@ class FileCheck(BaseModel):
         return bool(self.new) or bool(self.modified) or bool(self.deleted)
 
     def compare_to_previous(self, previous: Self):
+        self.new = set()
+
         for file, mtime in self.mtimes.items():
             # new files
             if file not in previous.mtimes:
