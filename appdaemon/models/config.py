@@ -1,0 +1,95 @@
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Union
+
+import pytz
+from pydantic import BaseModel, ConfigDict, field_validator
+from pytz.tzinfo import DstTzInfo, StaticTzInfo
+from appdaemon.version import __version__
+
+
+class PluginConfig(BaseModel):
+    type: str
+
+
+class AppDaemonConfig(BaseModel):
+    latitude: float
+    longitude: float
+    elevation: int
+    time_zone: Union[StaticTzInfo, DstTzInfo]
+    plugins: Dict[str, PluginConfig]
+
+    config_dir: Path
+    config_file: Path
+    app_dir: Optional[Path] = "./apps"
+
+    use_toml: bool = False
+
+    module_debug: Dict = {}
+    filters: Dict = {}
+
+    starttime: Optional[datetime] = None
+    endtime: Optional[datetime] = None
+    timewarp: float = 1
+    max_clock_skew: int = 1
+
+    loglevel: str = "INFO"
+    api_port: Optional[int] = None
+    stop_function: Callable
+
+    utility_delay: int = 1
+    admin_delay: int = 1
+    max_utility_skew: float = 2
+    check_app_updates_profile: bool = False
+    production_mode: bool = False
+    invalid_config_warnings: bool = True
+    missing_app_warnings: bool = True
+    log_thread_actions: bool = False
+    qsize_warning_threshold: int = 50
+    qsize_warning_step: int = 60
+    qsize_warning_iterations: int = 10
+    internal_function_timeout: int = 10
+    use_dictionary_unpacking: bool = False
+    use_stream: bool = False
+    import_paths: List[Path] = []
+    namespaces: Dict[str, Dict] = {}
+    exclude_dirs: List[str] = []
+    cert_verify: bool = True
+    disable_apps: bool = True
+
+    load_distribution: str = "roundrobbin"
+    thread_duration_warning_threshold: float = 10
+    threadpool_workers: int = 10
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    ad_version: str = __version__
+
+    @field_validator("exclude_dirs", mode="after")
+    @classmethod
+    def add_default_exclusions(cls, v: List[Path]):
+        v.extend(["__pycache__", "build"])
+        return v
+
+    @field_validator("loglevel", mode="before")
+    @classmethod
+    def convert_loglevel(cls, v: Union[str, int]):
+        if isinstance(v, int):
+            return logging._levelToName[int]
+        elif isinstance(v, str):
+            v = v.upper()
+            assert v in logging._nameToLevel, f"Invalid log level: {v}"
+            return v
+
+    @field_validator("time_zone", mode="before")
+    @classmethod
+    def convert_timezone(cls, v: str):
+        return pytz.timezone(v)
+
+    def model_post_init(self, __context: Any):
+        # Convert app_dir to Path object
+        self.app_dir = Path(self.app_dir) if not isinstance(self.app_dir, Path) else self.app_dir
+
+        # Resolve app_dir relative to config_dir if it's a relative path
+        if not self.app_dir.is_absolute():
+            self.app_dir = self.config_dir / self.app_dir
