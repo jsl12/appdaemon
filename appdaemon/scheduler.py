@@ -25,30 +25,27 @@ class Scheduler:
     error: Logger
     diag: Logger
 
+    active: bool = False
+    realtime: bool = True
+    stopping: bool = False
+
     def __init__(self, ad: "AppDaemon"):
         self.AD = ad
-
         self.logger = ad.logging.get_child("_scheduler")
         self.error = ad.logging.get_error()
         self.diag = ad.logging.get_diag()
         self.last_fired = None
         self.sleep_task = None
-        self.active = False
         self.timer_resetted = False
         self.location = None
         self.schedule = {}
 
-        self.now = pytz.utc.localize(datetime.datetime.utcnow())
+        self.now = datetime.datetime.now(datetime.UTC)
 
         #
         # If we were waiting for a timezone from metadata, we have it now.
         #
-        tz = pytz.timezone(self.AD.time_zone)
-        self.AD.tz = tz
-        self.AD.logging.set_tz(tz)
-
-        self.stopping = False
-        self.realtime = True
+        self.AD.logging.set_tz(self.AD.tz)
 
         self.set_start_time()
 
