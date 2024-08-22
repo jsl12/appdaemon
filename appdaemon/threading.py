@@ -603,7 +603,7 @@ class Threading:
         """Used to check Constraint"""
 
         unconstrained = True
-        if key in app.list_constraints():
+        if hasattr(app, "list_constraints") and key in app.list_constraints():
             method = getattr(app, key)
             unconstrained = await utils.run_async_sync_func(self, method, value)
 
