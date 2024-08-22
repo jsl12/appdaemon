@@ -1000,6 +1000,9 @@ class AppManagement:
                 await utils.run_in_executor(self, self._process_import_paths)
 
             module_load_order: List[str] = await utils.run_in_executor(self, self._check_python_files)
+            if module_load_order:
+                self.logger.debug("Determined module load order: %s", module_load_order)
+
             affected_apps = self._add_reload_apps(module_load_order)
             if affected_apps:
                 self.logger.debug("Apps affected by (re)loading modules: %s", affected_apps)
@@ -1019,7 +1022,7 @@ class AppManagement:
                     self.logger.debug("Removing %s apps because they failed to stop cleanly", len(failed_to_stop))
                     affected_apps -= failed_to_stop
 
-                self.logger.debug("Determined module load order: %s", module_load_order)
+                # self.logger.debug("Determined module load order: %s", module_load_order)
                 failed_to_import = await self._import_modules(module_load_order)
                 if failed_to_import:
                     self.logger.debug("Removing %s apps because their modules failed to import", len(failed_to_import))
@@ -1029,11 +1032,10 @@ class AppManagement:
                 sub_graph = {app_name: dep_graph[app_name] for app_name in affected_apps}
                 sub_graph = reverse_graph(sub_graph)
                 app_load_order = topo_sort(sub_graph)
-                self.logger.debug("Determined app load order: %s", app_load_order)
-
-                await self._create_apps(app_load_order)
-
-                await self._initialize_apps(app_load_order)
+                if app_load_order:
+                    self.logger.debug("Determined app load order: %s", app_load_order)
+                    await self._create_apps(app_load_order)
+                    await self._initialize_apps(app_load_order)
 
             self.apps_initialized = True
 
@@ -1143,7 +1145,9 @@ class AppManagement:
             # get the subset of the dependencies that apply to the modules to load
             to_load = modules | dependents
             sub_deps = {m: self.module_dependencies[m] for m in to_load}
-            load_order = topo_sort(sub_deps)
+
+            # only actually use the ones that come from new and/or modified files
+            load_order = [m for m in topo_sort(sub_deps) if m in to_load]
             return load_order
         else:
             return []

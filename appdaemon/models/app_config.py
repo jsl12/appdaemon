@@ -15,7 +15,10 @@ class GlobalModules(RootModel):
 class GlobalModule(BaseModel):
     global_: bool = Field(alias="global")
     module_name: str = Field(alias="module")
-    dependencies: Set[str] = {}
+    dependencies: Set[str] = Field(default_factory=set)
+    global_dependencies: Set[str] = Field(default_factory=set)
+    """Global modules that this app depends on.
+    """
 
 
 class SequenceStep(RootModel):
@@ -41,10 +44,10 @@ class AppConfig(BaseModel, extra="allow"):
     class_name: str = Field(alias="class")
     """Name of the class to use for the app. Must be accessible as an attribute of the imported `module_name`
     """
-    dependencies: Optional[Set[str]] = None
+    dependencies: Set[str] = Field(default_factory=set)
     """Other apps that this app depends on. They are guaranteed to be loaded and started before this one.
     """
-    global_dependencies: Set[str] = {}
+    global_dependencies: Set[str] = Field(default_factory=set)
     """Global modules that this app depends on.
     """
     disable: bool = False
@@ -102,7 +105,7 @@ class AllAppConfig(RootModel):
     def depedency_graph(self) -> Dict[str, Set[str]]:
         """Maps the app names to the other apps that they depend on"""
         return {
-            app_name: cfg.dependencies
+            app_name: cfg.dependencies | cfg.global_dependencies
             for app_name, cfg in self.root.items()
             if isinstance(cfg, (AppConfig, GlobalModule))
         }
