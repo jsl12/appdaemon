@@ -22,7 +22,7 @@ from datetime import timedelta
 from functools import wraps
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Dict, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict
 
 import dateutil.parser
 import tomli
@@ -867,11 +867,11 @@ def recursive_reload(module: ModuleType, reloaded: set = None):
     reloaded.add(module.__name__)
 
 
-def count_positional_arguments(app_class: Type) -> int:
+def count_positional_arguments(callable: Callable) -> int:
     return len(
         [
             p
-            for p in inspect.signature(app_class.__init__).parameters.values()
+            for p in inspect.signature(callable).parameters.values()
             if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD or p.kind == inspect.Parameter.VAR_POSITIONAL
         ]
     )

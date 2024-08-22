@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated, Any, Callable, Dict, List, Literal, Optional, Union
 
 import pytz
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pytz.tzinfo import DstTzInfo, StaticTzInfo
 from typing_extensions import deprecated
 
@@ -33,7 +33,7 @@ class AppDaemonConfig(BaseModel, extra="forbid"):
     longitude: float
     elevation: int
     time_zone: Union[StaticTzInfo, DstTzInfo]
-    plugins: Optional[Dict[str, PluginConfig]] = None
+    plugins: Dict[str, PluginConfig] = Field(default_factory=dict)
 
     config_dir: Path
     config_file: Path
