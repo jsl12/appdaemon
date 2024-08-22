@@ -402,7 +402,7 @@ class Threading:
         if appinfo is None:  # app possibly terminated
             return
 
-        appentity = "{}.{}".format(appinfo["type"], app)
+        appentity = f"{appinfo.type}.{app}"
 
         now = await self.AD.sched.get_now()
         if callback == "idle":
@@ -805,11 +805,11 @@ class Threading:
         # Argument Constraints
         # (plugins have no args so skip if necessary)
         #
-        if name in self.AD.app_management.app_config:
-            for arg in self.AD.app_management.app_config[name].keys():
+        if app_cfg := self.AD.app_management.app_config.root.get(name):
+            for arg, val in app_cfg.args.items():
                 constrained = await self.check_constraint(
                     arg,
-                    self.AD.app_management.app_config[name][arg],
+                    val,
                     self.AD.app_management.objects[name].object,
                 )
                 if not constrained:

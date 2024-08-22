@@ -61,6 +61,13 @@ class AppConfig(BaseModel, extra="allow"):
     def coerce_to_list(cls, value: Union[str, Set[str]]) -> Set[str]:
         return set((value,)) if isinstance(value, str) else value
 
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
+    @property
+    def args(self) -> Dict[str, Dict]:
+        return self.model_dump(by_alias=True, exclude_unset=True)
+
 
 class AllAppConfig(RootModel):
     root: Dict[str, Union[AppConfig, GlobalModule, GlobalModules, Sequence]] = {}

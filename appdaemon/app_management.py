@@ -55,6 +55,7 @@ class LoadingActions:
     init: Set[str] = field(default_factory=set)
     reload: Set[str] = field(default_factory=set)
     term: Set[str] = field(default_factory=set)
+    failed: Set[str] = field(default_factory=set)
 
     def init_sort(self, graph: Dict[str, Set[str]]):
         rev_graph = reverse_graph(graph)
@@ -570,7 +571,19 @@ class AppManagement:
                             cfg.config_path = path
                     return config_model
 
-                yield await safe_read(self, path)
+                new_cfg: AllAppConfig = await safe_read(self, path)
+                for name, cfg in new_cfg.root.items():
+                    await self.add_entity(
+                        name,
+                        state="loaded",
+                        attributes={
+                            "totalcallbacks": 0,
+                            "instancecallbacks": 0,
+                            "args": cfg.args,
+                            "config_path": cfg.config_path,
+                        },
+                    )
+                yield new_cfg
 
         def update(d1: Dict, d2: Dict) -> Dict:
             """Internal funciton to log warnings if an app's name gets repeated."""
@@ -964,7 +977,7 @@ class AppManagement:
         if app_load_order:
             self.logger.debug("App start order: %s", app_load_order)
             # TODO combine with self.start_apps
-            await self._create_apps(app_load_order)
+            await self._create_apps(update_actions)
             await self._initialize_apps(app_load_order)
 
     async def _import_modules(self, update_actions: UpdateActions) -> Set[str]:
@@ -1000,7 +1013,9 @@ class AppManagement:
 
         return failed_import_apps
 
-    async def _create_apps(self, load_order: List[str]):
+    async def _create_apps(self, update_actions: UpdateActions):
+        load_order = update_actions.apps.init_sort(self.app_config.depedency_graph())
+
         for app_name in load_order:
             # Set the cfg variable which can be used for later checks too
             if not (cfg := self.app_config.root.get(app_name)):
@@ -1028,7 +1043,8 @@ class AppManagement:
                         result = await self.create_app_object(app_name)
                     except Exception:
                         await self.increase_inactive_apps(app_name)
-                        load_order.remove(app_name)
+                        # load_order.remove(app_name)
+                        update_actions.apps.failed.add(app_name)
                         raise
                     else:
                         return result
