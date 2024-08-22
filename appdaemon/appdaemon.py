@@ -292,6 +292,10 @@ class AppDaemon:
         return self.config.starttime
 
     @property
+    def stop_function(self):
+        return self.config.stop_function or self.stop
+
+    @property
     def thread_duration_warning_threshold(self):
         return self.config.thread_duration_warning_threshold
 

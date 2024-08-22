@@ -24,6 +24,7 @@ from pydantic import ValidationError
 import appdaemon.appdaemon as ad
 import appdaemon.utils as utils
 from appdaemon.app_management import UpdateMode
+from appdaemon.appdaemon import AppDaemon
 from appdaemon.http import HTTP
 from appdaemon.logging import Logging
 from appdaemon.models.config import AppDaemonConfig
@@ -43,6 +44,8 @@ class ADMain:
     """
     Class to encapsulate all main() functionality.
     """
+
+    AD: AppDaemon
 
     logging: Logging
 

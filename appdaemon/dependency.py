@@ -1,8 +1,7 @@
 import ast
-from pathlib import Path
-from typing import Dict, Set, Iterable
-
 import logging
+from pathlib import Path
+from typing import Dict, Iterable, Set
 
 logger = logging.getLogger("AppDaemon._app_management")
 
@@ -66,7 +65,7 @@ class DependencyResolutionFail(Exception):
 
 
 def get_file_deps(file_path: Path) -> Set[str]:
-    """Recursively parses the content of the Python file to find which modules and/or packages each file depends on.
+    """Parses the content of the Python file to find which modules and/or packages it imports.
 
     Args:
         file_path (Path): Path to the Python file to parse
@@ -83,20 +82,17 @@ def get_file_deps(file_path: Path) -> Set[str]:
         try:
             tree = ast.parse(file_content, filename=file_path)
         except Exception as e:
-            raise DependencyResolutionFail(base_exception=e)
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                yield from (alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                if node.level:
-                    abs_module = resolve_relative_import(node, file_path)
-                    yield abs_module
-                else:
-                    yield node.module
-
-        # if (pkg_init := file_path.with_name('__init__.py')).exists() and file_path != pkg_init:
-        #     yield get_full_module_name(pkg_init)
+            logger.error(f"{e}")
+        else:
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    yield from (alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom):
+                    if node.level:
+                        abs_module = resolve_relative_import(node, file_path)
+                        yield abs_module
+                    else:
+                        yield node.module
 
     return set(gen_modules())
 
@@ -153,7 +149,7 @@ def reverse_graph(graph: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
 def find_all_dependents(
     base_nodes: Iterable[str], reversed_deps: Dict[str, Set[str]], visited: Set[str] = None
 ) -> Set[str]:
-    """Find all nodes that directly or indirectly depend on the specified base nodes.
+    """Recursively find all nodes that depend on the specified base nodes.
 
     Args:
         base_nodes (Iterable[str]): A list or set of base node names to start the search from.

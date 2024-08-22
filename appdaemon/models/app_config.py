@@ -1,11 +1,11 @@
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Dict, Iterable, Iterator, List, Optional, Set, Tuple, Union
 
-from pydantic_core import PydanticUndefinedType
-import yaml
 from pydantic import BaseModel, Field, RootModel, field_validator, model_validator
+from pydantic_core import PydanticUndefinedType
 
 from ..dependency import reverse_graph
+from ..utils import read_config_file
 
 
 class GlobalModules(RootModel):
@@ -21,17 +21,15 @@ class GlobalModule(BaseModel):
     """
 
 
-class SequenceStep(RootModel):
-    root: Dict[str, Dict]
-
-
-class SequenceItem(BaseModel):
-    name: str
-    namespace: str = "default"
-    steps: List[SequenceStep]
-
-
 class Sequence(RootModel):
+    class SequenceItem(BaseModel):
+        class SequenceStep(RootModel):
+            root: Dict[str, Dict]
+
+        name: str
+        namespace: str = "default"
+        steps: List[SequenceStep]
+
     root: Dict[str, SequenceItem]
 
 
@@ -91,22 +89,21 @@ class AllAppConfig(RootModel):
         return self.root[key]
 
     @property
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Path]:
         return self.root.__iter__
 
     @classmethod
-    def from_path(cls, path: Path):
+    def from_config_file(cls, path: Path):
         """Not used, debug only"""
-        with path.open("r") as f:
-            return cls.model_validate(yaml.safe_load(f))
+        return cls.model_validate(read_config_file(path))
 
     @classmethod
-    def from_paths(cls, paths: Iterable[Path]):
+    def from_config_files(cls, paths: Iterable[Path]):
         """Not used, debug only"""
         paths = iter(paths)
-        self = cls.from_path(next(paths))
+        self = cls.from_config_file(next(paths))
         for p in paths:
-            self.root.update(cls.from_path(p).root)
+            self.root.update(cls.from_config_file(p).root)
         return self
 
     def depedency_graph(self) -> Dict[str, Set[str]]:

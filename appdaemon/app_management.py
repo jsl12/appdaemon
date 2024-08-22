@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Literal, Optional, Self, 
 
 import appdaemon.utils as utils
 from appdaemon.dependency import (
+    DependencyResolutionFail,
     find_all_dependents,
     get_dependency_graph,
     get_full_module_name,
@@ -28,7 +29,6 @@ from appdaemon.dependency import (
 )
 from appdaemon.models.app_config import AllAppConfig, AppConfig, GlobalModule
 from appdaemon.models.internal.file_check import FileCheck
-from appdaemon.dependency import DependencyResolutionFail
 
 if TYPE_CHECKING:
     from appdaemon.appdaemon import AppDaemon
@@ -154,10 +154,10 @@ class AppManagement:
     check_app_updates_profile_stats: str = ""
     check_updates_lock: asyncio.Lock = asyncio.Lock()
 
-    mtimes_config: FileCheck = FileCheck()
+    mtimes_config: FileCheck
     """Keeps track of the new, modified, and deleted app configuration files
     """
-    mtimes_python: FileCheck = FileCheck()
+    mtimes_python: FileCheck
     """Keeps track of the new, modified, and deleted Python files
     """
 
@@ -200,6 +200,9 @@ class AppManagement:
         self.AD.services.register_service("admin", "app", "create", self.manage_services)
         self.AD.services.register_service("admin", "app", "edit", self.manage_services)
         self.AD.services.register_service("admin", "app", "remove", self.manage_services)
+
+        self.mtimes_config = FileCheck()
+        self.mtimes_python = FileCheck()
 
         self.active_apps = set()
         self.inactive_apps = set()
@@ -969,7 +972,7 @@ class AppManagement:
 
                     @utils.warning_decorator(
                         success_text=f"Started '{app_name}'",
-                        error_text=f"Unexpected error starting app '{app_name}' in {rel_path}",
+                        error_text=f"Error starting app '{app_name}' from {rel_path}",
                     )
                     async def safe_start(self: Self):
                         try:
@@ -987,10 +990,7 @@ class AppManagement:
             self.logger.debug("Determined module load order: %s", load_order)
             for module_name in load_order:
 
-                @utils.warning_decorator(
-                    # start_text=f"Importing '{module_name}'",
-                    error_text=f"Error importing '{module_name}'",
-                )
+                @utils.warning_decorator(error_text=f"Error importing '{module_name}'")
                 async def safe_import(self: Self):
                     try:
                         await self.import_module(module_name)
@@ -1002,6 +1002,12 @@ class AppManagement:
                         raise
 
                 await safe_import(self)
+
+        if failed := update_actions.modules.failed:
+            failed |= find_all_dependents(failed, self.reversed_graph)
+            affected_apps = set(app_name for module in failed for app_name in self.apps_per_module(module))
+            update_actions.apps.init -= affected_apps
+            update_actions.apps.reload -= affected_apps
 
     def apps_per_module(self, module_name: str) -> Set[str]:
         """Finds which apps came from a given module name.

@@ -54,7 +54,7 @@ class AppDaemonConfig(BaseModel, extra="forbid"):
     module_debug: Dict[str, str] = {}
 
     api_port: Optional[int] = None
-    stop_function: Callable
+    stop_function: Optional[Callable] = None
 
     utility_delay: int = 1
     admin_delay: int = 1
@@ -96,6 +96,11 @@ class AppDaemonConfig(BaseModel, extra="forbid"):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
     ad_version: str = __version__
+
+    @field_validator("config_dir", mode="after")
+    @classmethod
+    def convert_to_absolute(cls, v: Path):
+        return v.resolve()
 
     @field_validator("exclude_dirs", mode="after")
     @classmethod
