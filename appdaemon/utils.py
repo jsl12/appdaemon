@@ -385,10 +385,8 @@ async def run_in_executor(self, fn, *args, **kwargs) -> Any:
     """
     ad: "AppDaemon" = self.AD
     preloaded_function = functools.partial(fn, *args, **kwargs)
-    completed, pending = await asyncio.wait([ad.loop.run_in_executor(ad.executor, preloaded_function)])
-    future = list(completed)[0]
-    response = future.result()
-    return response
+    future = ad.loop.run_in_executor(executor=ad.executor, func=preloaded_function)
+    return await future
 
 
 def run_coroutine_threadsafe(self, coro):
