@@ -1,5 +1,5 @@
 import datetime
-import os
+from pathlib import Path
 import traceback
 import uuid
 from copy import copy, deepcopy
@@ -30,15 +30,19 @@ class State:
         self.app_added_namespaces = []
 
         # Initialize User Defined Namespaces
-
-        nspath = os.path.join(self.AD.config_dir, "namespaces")
-        if not os.path.isdir(nspath):
-            os.makedirs(nspath)
+        self.namespace_path.mkdir(exist_ok=True)
 
         for ns in self.AD.namespaces:
             writeback = self.AD.namespaces[ns].get("writeback", "safe")
             self.add_persistent_namespace(ns, writeback)
             self.logger.info("User Defined Namespace '%s' initialized", ns)
+
+    @property
+    def namespace_path(self) -> Path:
+        return self.AD.config_dir / "namespaces"
+
+    def namespace_db_path(self, namespace: str) -> Path:
+        return self.namespace_path / f"{namespace}.db"
 
     async def add_namespace(self, namespace, writeback, persist, name=None):
         """Used to Add Namespaces from Apps"""
@@ -109,11 +113,9 @@ class State:
                 self.logger.info("Persistent Namespace '%s' already initialized", namespace)
                 return
 
-            nspath = os.path.join(self.AD.config_dir, "namespaces")
+            ns_db_path = self.namespace_db_path(namespace)
             safe = bool(writeback == "safe")
-            nspath_file = os.path.join(nspath, f"{namespace}.db")
-
-            self.state[namespace] = utils.PersistentDict(nspath_file, safe)
+            self.state[namespace] = utils.PersistentDict(ns_db_path, safe)
 
             self.logger.info("Persistent Namespace '%s' initialized", namespace)
 
@@ -124,27 +126,22 @@ class State:
             self.logger.warning(traceback.format_exc())
             self.logger.warning("-" * 60)
 
-        return nspath_file
+        return ns_db_path
 
-    def remove_persistent_namespace(self, namespace):
+    def remove_persistent_namespace(self, namespace: str):
         """Used to remove the file for a created namespace"""
 
         try:
-            nspath = os.path.join(self.AD.config_dir, "namespaces")
-            database_file = f"{namespace}.db"
-            nspath_file = os.path.join(nspath, database_file)
-
-            if os.path.isfile(nspath_file) is True:  # if the file exists remove it
-                os.remove(nspath_file)
-
+            ns_db_path = self.namespace_db_path(namespace)
+            if ns_db_path.exists():
+                ns_db_path.unlink()
+            return ns_db_path
         except Exception:
             self.logger.warning("-" * 60)
             self.logger.warning("Unexpected error in namespace removal")
             self.logger.warning("-" * 60)
             self.logger.warning(traceback.format_exc())
             self.logger.warning("-" * 60)
-
-        return nspath_file
 
     async def list_namespaces(self):
         ns = []

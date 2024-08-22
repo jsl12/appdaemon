@@ -115,13 +115,9 @@ class Plugins:
 
         plugins = []
 
-        if os.path.isdir(os.path.join(self.AD.config_dir, "custom_plugins")):
-            plugins = [
-                f.path
-                for f in os.scandir(os.path.join(self.AD.config_dir, "custom_plugins"))
-                if f.is_dir(follow_symlinks=True)
-            ]
-
+        custom_plugin_dir = self.AD.config_dir / "custom_plugins"
+        if custom_plugin_dir.exists() and custom_plugin_dir.is_dir():
+            plugins = (f.path for f in os.scandir(custom_plugin_dir) if f.is_dir(follow_symlinks=True))
             for plugin in plugins:
                 sys.path.insert(0, plugin)
 

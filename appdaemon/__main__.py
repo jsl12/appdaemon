@@ -7,13 +7,15 @@ also creates the loop and kicks everything off
 
 """
 
+
 import argparse
 import asyncio
 import os
-import os.path
 import platform
 import signal
 import sys
+from pathlib import Path
+from typing import Any, Dict
 
 import pytz
 
@@ -106,7 +108,7 @@ class ADMain:
             self.http_object.stop()
 
     # noinspection PyBroadException,PyBroadException
-    def run(self, appdaemon: ad.AppDaemon, hadashboard, admin, aui, api, http):
+    def run(self, ad_kwargs: Dict[str, Any], hadashboard, admin, aui, api, http):
         """Start AppDaemon up after initial argument parsing.
 
         Args:
@@ -124,7 +126,7 @@ class ADMain:
 
         try:
             # if to use uvloop
-            if appdaemon.get("uvloop") is True and uvloop:
+            if ad_kwargs.get("uvloop") is True and uvloop:
                 self.logger.info("Running AD using uvloop")
                 uvloop.install()
 
@@ -132,7 +134,7 @@ class ADMain:
 
             # Initialize AppDaemon
 
-            self.AD = ad.AppDaemon(self.logging, loop, **appdaemon)
+            self.AD = ad.AppDaemon(self.logging, loop, **ad_kwargs)
 
             # Initialize Dashboard/API/admin
 
@@ -144,7 +146,7 @@ class ADMain:
                     self.AD,
                     loop,
                     self.logging,
-                    appdaemon,
+                    ad_kwargs,
                     hadashboard,
                     admin,
                     aui,
@@ -244,7 +246,6 @@ class ADMain:
 
         args = parser.parse_args()
 
-        config_dir = args.config
         pidfile = args.pidfile
 
         module_debug = {}
@@ -252,59 +253,53 @@ class ADMain:
             for arg in args.moduledebug:
                 module_debug[arg[0]] = arg[1]
 
-        if args.configfile is None:
-            if args.toml is True:
-                config_file = "appdaemon.toml"
-            else:
-                config_file = "appdaemon.yaml"
+        if args.toml is True:
+            default_config_filename = "appdaemon.toml"
         else:
-            config_file = args.configfile
+            default_config_filename = "appdaemon.yaml"
 
-        if config_dir is None:
-            config_file_yaml = utils.find_path(config_file)
+        if args.config is None:
+            config_file = (
+                Path(args.configfile) if args.configfile is not None else utils.find_path(default_config_filename)
+            ).resolve()
         else:
-            config_file_yaml = os.path.join(config_dir, config_file)
+            config_dir = Path(args.config).resolve()
+            config_file = config_dir / (args.configfile if args.configfile is not None else default_config_filename)
 
-        if config_file_yaml is None:
-            print("FATAL: no configuration directory defined and defaults not present\n")
-            parser.print_help()
+        assert config_file.exists(), f"{config_file} does not exist"
+        assert os.access(config_file, os.R_OK), f"{config_file} is not readable"
+        try:
+            config = utils.read_config_file(config_file)
+        except Exception as e:
+            print(f"Unexpected error loading config file: {config_file}")
+            print(e)
             sys.exit(1)
 
-        try:
-            config = utils.read_config_file(config_file_yaml)
-        except Exception as e:
-            print(f"Unexpected error loading config file: {config_file_yaml}")
-            print(e)
-            sys.exit()
-
         if "appdaemon" not in config:
-            print("ERROR", "no 'appdaemon' section in {}".format(config_file_yaml))
-            sys.exit()
+            print("ERROR", "no 'appdaemon' section in {}".format(config_file))
+            sys.exit(1)
 
-        appdaemon = config["appdaemon"]
-        if "disable_apps" not in appdaemon:
-            appdaemon["disable_apps"] = False
+        ad_kwargs = config["appdaemon"]
+        if "disable_apps" not in ad_kwargs:
+            ad_kwargs["disable_apps"] = False
 
-        appdaemon["use_toml"] = args.toml
-        appdaemon["config_dir"] = config_dir
-        appdaemon["config_file"] = config_file_yaml
-        appdaemon["app_config_file"] = os.path.join(os.path.dirname(config_file_yaml), "apps.yaml")
-        appdaemon["module_debug"] = module_debug
+        ad_kwargs["use_toml"] = args.toml
+        ad_kwargs["config_dir"] = config_dir
+        ad_kwargs["config_file"] = config_file
+        ad_kwargs["module_debug"] = module_debug
 
         if args.starttime is not None:
-            appdaemon["starttime"] = args.starttime
+            ad_kwargs["starttime"] = args.starttime
 
         if args.endtime is not None:
-            appdaemon["endtime"] = args.endtime
+            ad_kwargs["endtime"] = args.endtime
 
-        if "timewarp" not in appdaemon:
-            appdaemon["timewarp"] = args.timewarp
+        if "timewarp" not in ad_kwargs:
+            ad_kwargs["timewarp"] = args.timewarp
 
-        appdaemon["loglevel"] = args.debug
+        ad_kwargs["loglevel"] = args.debug
 
-        appdaemon["config_dir"] = os.path.dirname(config_file_yaml)
-
-        appdaemon["stop_function"] = self.stop
+        ad_kwargs["stop_function"] = self.stop
 
         hadashboard = None
         if "hadashboard" in config:
@@ -315,8 +310,7 @@ class ADMain:
 
             hadashboard["profile_dashboard"] = args.profiledash
             hadashboard["config_dir"] = config_dir
-            hadashboard["config_file"] = config_file_yaml
-            hadashboard["config_dir"] = os.path.dirname(config_file_yaml)
+            hadashboard["config_file"] = config_file
             if args.profiledash:
                 hadashboard["profile_dashboard"] = True
 
@@ -374,7 +368,7 @@ class ADMain:
             sys.version_info[1],
             sys.version_info[2],
         )
-        self.logger.info("Configuration read from: %s", config_file_yaml)
+        self.logger.info("Configuration read from: %s", config_file)
         self.logging.dump_log_config()
         self.logger.debug("AppDaemon Section: %s", config.get("appdaemon"))
         self.logger.debug("HADashboard Section: %s", config.get("hadashboard"))
@@ -400,19 +394,17 @@ class ADMain:
         if exit is True:
             sys.exit(1)
 
-        utils.check_path("config_file", self.logger, config_file_yaml, pathtype="file")
-
         if pidfile is not None:
             self.logger.info("Using pidfile: %s", pidfile)
             dir = os.path.dirname(pidfile)
             name = os.path.basename(pidfile)
             try:
                 with pid.PidFile(name, dir):
-                    self.run(appdaemon, hadashboard, old_admin, admin, api, http)
+                    self.run(ad_kwargs, hadashboard, old_admin, admin, api, http)
             except pid.PidFileError:
                 self.logger.error("Unable to acquire pidfile - terminating")
         else:
-            self.run(appdaemon, hadashboard, old_admin, admin, api, http)
+            self.run(ad_kwargs, hadashboard, old_admin, admin, api, http)
 
 
 def main():

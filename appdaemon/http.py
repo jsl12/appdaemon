@@ -781,32 +781,21 @@ class HTTP:
         else:
             self.app.router.add_get("/", self.error_page)
 
-        #
         # For App based Web Server
-        #
         self.app.router.add_get("/app/{route}", self.app_webserver)
 
-        #
         # Add static path for apps
-        #
-        apps_static = os.path.join(self.AD.config_dir, "www")
-        exists = True
+        apps_static = self.AD.config_dir / "www"
+        try:
+            apps_static.mkdir(exist_ok=True)
+        except OSError:
+            self.logger.warning("Creation of the Web directory %s failed", apps_static)
 
-        if not os.path.isdir(apps_static):  # check if the folder exists
-            try:
-                os.mkdir(apps_static)
-            except OSError:
-                self.logger.warning("Creation of the Web directory %s failed", apps_static)
-                exists = False
-            else:
-                self.logger.debug("Successfully created the Web directory %s ", apps_static)
+        # Add router if necessary
+        if apps_static.exists():
+            self.app.router.add_static("/local", str(apps_static))
 
-        if exists:
-            self.app.router.add_static("/local", apps_static)
-        #
         # Setup user defined static paths
-        #
-
         for name, static_dir in self.static_dirs.items():
             if not os.path.isdir(static_dir):  # check if the folder exists
                 self.logger.warning("The Web directory %s doesn't exist. So static route not set up", static_dir)

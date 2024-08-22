@@ -1,3 +1,4 @@
+from pathlib import Path
 import threading
 from functools import wraps
 from copy import deepcopy
@@ -5,6 +6,7 @@ from copy import deepcopy
 import appdaemon.utils as utils
 import appdaemon.adapi as adapi
 from appdaemon.appdaemon import AppDaemon
+from appdaemon.logging import Logging
 
 from typing import Callable
 
@@ -60,9 +62,17 @@ class ADBase:
     # Internal
     #
 
+    AD: AppDaemon
+    name: str
+    _logging: Logging
+
+    app_dir: Path
+    config_dir: Path
+    lock: threading.RLock
+
     entities = Entities()
 
-    def __init__(self, ad: AppDaemon, name, logging, args, config, app_config, global_vars):
+    def __init__(self, ad: AppDaemon, name: str, logging: Logging, args, config, app_config, global_vars):
         # Store args
 
         self.AD = ad
@@ -73,8 +83,6 @@ class ADBase:
         self.args = deepcopy(args)
         self.global_vars = global_vars
         self.namespace = "default"
-        self.app_dir = self.AD.app_dir
-        self.config_dir = self.AD.config_dir
         self.dashboard_dir = None
 
         if self.AD.http is not None:
@@ -92,6 +100,14 @@ class ADBase:
         self.lock = threading.RLock()
 
         self.constraints = []
+
+    @property
+    def app_dir(self) -> Path:
+        return self.AD.app_dir
+
+    @property
+    def config_dir(self) -> Path:
+        return self.AD.config_dir
 
     #
     # API/Plugin

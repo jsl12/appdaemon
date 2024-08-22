@@ -19,6 +19,7 @@ import time
 from collections.abc import Iterable
 from datetime import timedelta
 from functools import wraps
+from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Dict
 
@@ -383,15 +384,13 @@ def deepcopy(data):
     return result
 
 
-def find_path(name: str):
-    for path in [
-        os.path.join(os.path.expanduser("~"), ".homeassistant"),
-        os.path.join(os.path.sep, "etc", "appdaemon"),
-    ]:
-        _file = os.path.join(path, name)
-        if os.path.isfile(_file) or os.path.isdir(_file):
-            return _file
-    return None
+def find_path(name: str) -> Path:
+    search_paths = [Path("~/.homeassistant").expanduser(), Path("/etc/appdaemon")]
+    for path in search_paths:
+        if (file := (path / name)).exists():
+            return file
+    else:
+        raise FileNotFoundError(f"Did not find {name} in {search_paths}")
 
 
 def single_or_list(field):
@@ -582,14 +581,15 @@ def get_object_size(obj, seen=None):
     return size
 
 
-def write_config_file(path, **kwargs):
-    extension = os.path.splitext(path)[1]
-    if extension == ".yaml":
-        write_yaml_config(path, **kwargs)
-    elif extension == ".toml":
-        write_toml_config(path, **kwargs)
+def write_config_file(file: Path, **kwargs):
+    """Writes a single YAML or TOML file."""
+    file = Path(file) if not isinstance(file, Path) else file
+    if file.suffix == ".yaml":
+        write_yaml_config(file, **kwargs)
+    elif file.suffix == ".toml":
+        write_toml_config(file, **kwargs)
     else:
-        raise ValueError(f"ERROR: unknown file extension: {extension}")
+        raise ValueError(f"ERROR: unknown file extension: {file.suffix}")
 
 
 def write_yaml_config(path, **kwargs):
@@ -602,30 +602,30 @@ def write_toml_config(path, **kwargs):
         tomli_w.dump(kwargs, stream)
 
 
-def read_config_file(path) -> Dict[str, Dict]:
+def read_config_file(file: Path) -> Dict[str, Dict]:
     """Reads a single YAML or TOML file."""
-    extension = os.path.splitext(path)[1]
-    if extension == ".yaml":
-        return read_yaml_config(path)
-    elif extension == ".toml":
-        return read_toml_config(path)
+    file = Path(file) if not isinstance(file, Path) else file
+    if file.suffix == ".yaml":
+        return read_yaml_config(file)
+    elif file.suffix == ".toml":
+        return read_toml_config(file)
     else:
-        raise ValueError(f"ERROR: unknown file extension: {extension}")
+        raise ValueError(f"ERROR: unknown file extension: {file.suffix}")
 
 
-def read_toml_config(path):
-    with open(path, "rb") as f:
+def read_toml_config(path: Path):
+    with path.open("rb") as f:
         config = tomli.load(f)
 
     # now figure out secrets file
 
     if "secrets" in config:
-        secrets_file = config["secrets"]
+        secrets_file = Path(config["secrets"])
     else:
-        secrets_file = os.path.join(os.path.dirname(path), "secrets.toml")
+        secrets_file = path.with_name("secrets.toml")
 
     try:
-        with open(secrets_file, "rb") as f:
+        with secrets_file.open("rb") as f:
             secrets = tomli.load(f)
     except FileNotFoundError:
         # We have no secrets
@@ -718,7 +718,7 @@ def _include_yaml(loader, node):
         return yaml.load(f, Loader=yaml.SafeLoader)
 
 
-def read_yaml_config(config_file_yaml) -> Dict[str, Dict]:
+def read_yaml_config(file: Path) -> Dict[str, Dict]:
     #
     # First locate secrets file
     #
@@ -739,33 +739,28 @@ def read_yaml_config(config_file_yaml) -> Dict[str, Dict]:
     # Initially load file to see if secret directive is present
     #
     yaml.add_constructor("!secret", _dummy_secret, Loader=yaml.SafeLoader)
-    with open(config_file_yaml, "r") as yamlfd:
-        config_file_contents = yamlfd.read()
-
-    config = yaml.load(config_file_contents, Loader=yaml.SafeLoader)
+    with file.open("r") as yamlfd:
+        config = yaml.safe_load(yamlfd)
 
     if "secrets" in config:
-        secrets_file = config["secrets"]
+        secrets_file = Path(config["secrets"])
     else:
-        secrets_file = os.path.join(os.path.dirname(config_file_yaml), "secrets.yaml")
+        secrets_file = file.with_name("secrets.yaml")
 
     #
     # Read Secrets
     #
-    if os.path.isfile(secrets_file):
-        with open(secrets_file, "r") as yamlfd:
-            secrets_file_contents = yamlfd.read()
-
-        global secrets
-        secrets = yaml.load(secrets_file_contents, Loader=yaml.SafeLoader)
-
-    else:
-        if "secrets" in config:
-            print(
-                "ERROR",
-                "Error loading secrets file: {}".format(config["secrets"]),
-            )
-            return None
+    try:
+        if secrets_file.exists():
+            with secrets_file.open("r") as yamlfd:
+                global secrets
+                secrets = yaml.safe_load(yamlfd)
+    except Exception:
+        print(
+            "ERROR",
+            f"Error loading secrets file: {secrets_file}",
+        )
+        return None
 
     #
     # Read config file again, this time with secrets
@@ -773,12 +768,8 @@ def read_yaml_config(config_file_yaml) -> Dict[str, Dict]:
 
     yaml.add_constructor("!secret", _secret_yaml, Loader=yaml.SafeLoader)
 
-    with open(config_file_yaml, "r") as yamlfd:
-        config_file_contents = yamlfd.read()
-
-    config = yaml.load(config_file_contents, Loader=yaml.SafeLoader)
-
-    return config
+    with file.open("r") as yamlfd:
+        return yaml.safe_load(yamlfd)
 
 
 def recursive_reload(module: ModuleType, reloaded: set = None):

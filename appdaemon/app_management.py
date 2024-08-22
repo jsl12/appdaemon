@@ -692,8 +692,9 @@ class AppManagement:
         return later_files
 
     # Run in executor
-    def read_config_file(self, file) -> Dict[str, Dict]:
+    def read_config_file(self, file: Path) -> Dict[str, Dict]:
         """Reads a single YAML or TOML file."""
+        file = Path(file) if not isinstance(file, Path) else file
         try:
             return utils.read_config_file(file)
         except Exception:
@@ -1104,6 +1105,9 @@ class AppManagement:
                 self.logger.warning(f"import_path {path} is not a directory - not adding to path")
                 continue
 
+            if not path.is_absolute():
+                path = Path(self.AD.config_dir) / path
+
             self.add_to_import_path(path)
 
     def get_python_files(self) -> Iterable[Path]:
@@ -1458,12 +1462,10 @@ class AppManagement:
 
         return deps
 
-    def create_app(self, app=None, **kwargs):
+    def create_app(self, app: str = None, **kwargs):
         """Used to create an app, which is written to a config file"""
 
         executed = True
-        app_file = kwargs.pop("app_file", None)
-        app_directory = kwargs.pop("app_dir", None)
         app_config = {}
         new_config = OrderedDict()
 
@@ -1490,39 +1492,20 @@ class AppManagement:
             self.logger.error("Could not create app %s, as module and class is required", app)
             return False
 
-        if app_directory is None:
-            app_directory = os.path.join(self.AD.app_dir, "ad_apps")
+        app_directory: Path = self.AD.app_dir / kwargs.pop("app_dir", "ad_apps")
+        app_file: Path = app_directory / kwargs.pop("app_file", f"{app}{self.ext}")
+        app_directory = app_file.parent  # in case the given app_file is multi level
 
-        else:
-            app_directory = os.path.join(self.AD.app_dir, app_directory)
+        try:
+            app_directory.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self.logger.error("Could not create directory %s", app_directory)
+            return False
 
-        if app_file is None:
-            app_file = os.path.join(app_directory, f"{app}{self.ext}")
-            self.logger.info("Creating app using filename %s", app_file)
-
-        else:
-            if app_file[-5:] != self.ext:
-                app_file = f"{app_file}{self.ext}"
-
-            app_file = os.path.join(app_directory, app_file)
-
-            # in case the given app_file is multi level
-            filename = app_file.split("/")[-1]
-            app_directory = app_file.replace(f"/{filename}", "")
-
-        if os.path.isfile(app_file):
+        if app_file.is_file():
             # the file exists so there might be apps there already so read to update
             # now open the file and edit the yaml
             new_config.update(self.read_config_file(app_file))
-
-        elif not os.path.isdir(app_directory):
-            self.logger.info("The given app filename %s doesn't exist, will be creating it", app_file)
-            # now create the directory
-            try:
-                os.makedirs(app_directory)
-            except Exception:
-                self.logger.error("Could not create directory %s", app_directory)
-                return False
 
         # now load up the new config
         new_config.update(app_config)

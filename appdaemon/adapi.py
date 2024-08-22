@@ -1,6 +1,7 @@
 import asyncio
 import datetime as dt
 import inspect
+from pathlib import Path
 import re
 import uuid
 from asyncio import Future
@@ -29,6 +30,8 @@ class ADAPI:
     name: str
     """The app name, which is set by the top-level key in the YAML file
     """
+    app_dir: Path
+    config_dir: Path
     _logging: Logging
     """Reference to the Logging subsystem object
     """
@@ -58,8 +61,6 @@ class ADAPI:
         self.app_config = app_config
         # same as self.AD.app_management.app_config
         self.args = deepcopy(args)
-        self.app_dir = self.AD.app_dir
-        self.config_dir = self.AD.config_dir
         self.dashboard_dir = None
 
         if self.AD.http is not None:
@@ -100,6 +101,17 @@ class ADAPI:
             namespace = self._namespace
 
         return namespace
+
+    #
+    # Properties
+    #
+    @property
+    def app_dir(self) -> Path:
+        return self.AD.app_dir
+
+    @property
+    def config_dir(self) -> Path:
+        return self.AD.config_dir
 
     #
     # Logging

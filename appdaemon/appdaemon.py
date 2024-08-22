@@ -4,7 +4,7 @@ import threading
 from asyncio import BaseEventLoop
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
 import appdaemon.utils as utils
 from appdaemon.admin_loop import AdminLoop
@@ -96,10 +96,10 @@ class AppDaemon:
     stopping: bool
 
     # settings
-    app_dir: Union[str, Path]
+    app_dir: Path
     """Defined in the main YAML config under ``appdaemon.app_dir``. Defaults to ``./apps``
     """
-    config_dir: Union[str, Path]
+    config_dir: Path
     """Path to the AppDaemon configuration files. Defaults to the first folder that has ``./apps``
 
     - ``~/.homeassistant``
@@ -245,13 +245,10 @@ class AppDaemon:
         self.import_paths = []
         utils.process_arg(self, "import_paths", kwargs)
 
-        self.import_method = "normal"
-        utils.process_arg(self, "import_method", kwargs)
-
         self.namespaces = {}
         utils.process_arg(self, "namespaces", kwargs)
 
-        self.exclude_dirs = ["__pycache__"]
+        self.exclude_dirs = ["__pycache__", "build"]
         if "exclude_dirs" in kwargs:
             self.exclude_dirs += kwargs["exclude_dirs"]
 
@@ -303,18 +300,20 @@ class AppDaemon:
         self.futures = Futures(self)
 
         if self.apps is True:
+            assert self.config_dir is not None, "Config_dir not set. This is a development problem"
+            assert self.config_dir.exists(), f"{self.config_dir} does not exist"
+            assert os.access(
+                self.config_dir, os.R_OK | os.W_OK | os.X_OK
+            ), f"{self.config_dir} does not have the right permissions"
+
+            # this will always be None because it never gets set in ad_kwargs in __main__.py
             if self.app_dir is None:
-                if self.config_dir is None:
-                    self.app_dir = utils.find_path("apps")
-                    self.config_dir = os.path.dirname(self.app_dir)
-                else:
-                    self.app_dir = os.path.join(self.config_dir, "apps")
-
-            utils.check_path("config_dir", self.logger, self.config_dir, permissions="rwx")
-            utils.check_path("appdir", self.logger, self.app_dir)
-
-            self.config_dir = os.path.abspath(self.config_dir)
-            self.app_dir = os.path.abspath(self.app_dir)
+                self.app_dir = self.config_dir / "apps"
+                if not self.app_dir.exists():
+                    self.app_dir.mkdir()
+                assert os.access(
+                    self.app_dir, os.R_OK | os.W_OK | os.X_OK
+                ), f"{self.app_dir} does not have the right permissions"
 
             # Initialize Apps
 
