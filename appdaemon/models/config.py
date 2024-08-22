@@ -14,7 +14,7 @@ from appdaemon.version import __version__
 class PluginConfig(BaseModel, extra="allow"):
     type: str
     persist_entities: bool = False
-    namespace: Optional[str] = None
+    namespace: str = "default"
 
 
 class FilterConfig(BaseModel):
