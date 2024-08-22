@@ -7,22 +7,52 @@ import logging
 logger = logging.getLogger("AppDaemon._app_management")
 
 
-def resolve_relative_import(file_path: Path, module: str, level: int = 1):
-    """
-    Resolve relative imports to their absolute paths based on the file location.
-    """
-    file_path = Path(file_path) if not isinstance(file_path, Path) else file_path
-    pkg = [parent.name for parent in file_path.parents if (parent / "__init__.py").exists()]
-    pkg = pkg[level - len(pkg) - 1 :][::-1]
-    if module:
-        pkg.append(module)
+def get_full_module_name(file_path: Path) -> str:
+    """Get the full module name of a single file by iterating backwards through its parents looking for __init__.py files.
 
-    res = ".".join(pkg)
+    Args:
+        file_path (Path): _description_
+
+    Returns:
+        Full module name, delimited with periods
+    """
+    file_path = file_path if isinstance(file_path, Path) else Path(file_path)
+    assert file_path.is_file(), f"{file_path} is not a file"
+    assert file_path.suffix == ".py", f"{file_path} is not a Python file"
+
+    def _gen():
+        if file_path.name != "__init__.py":
+            yield file_path.stem
+        for parent in file_path.parents:
+            if (parent / "__init__.py").exists():
+                yield parent.name
+            else:
+                break
+
+    parts = list(_gen())[::-1]
+    return ".".join(parts)
+
+
+def resolve_relative_import(node: ast.ImportFrom, path: Path):
+    assert isinstance(node, ast.ImportFrom)
+    path = path if isinstance(path, Path) else Path(path)
+
+    full_module_name = get_full_module_name(path)
+    parts = full_module_name.split(".")
+
+    if node.module:
+        parts = parts[: -node.level + 1]
+        parts.append(node.module)
+    else:
+        for _ in range(node.level - 1):
+            parts.pop(-1)
+
+    res = ".".join(parts)
     # assert res in sys.modules
     return res
 
 
-def get_module_deps(file_path: Path) -> Set[str]:
+def get_file_deps(file_path: Path) -> Set[str]:
     """Recursively parses the content of the Python file to find which modules and/or packages each file depends on.
 
     Args:
@@ -43,12 +73,23 @@ def get_module_deps(file_path: Path) -> Set[str]:
             if isinstance(node, ast.Import):
                 yield from (alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
-                if lvl := node.level:
-                    yield resolve_relative_import(file_path, node.module, lvl)
+                if node.level:
+                    rel_module = resolve_relative_import(node, file_path)
+                    yield rel_module
                 else:
                     yield node.module
 
     return set(gen_modules())
+
+
+def get_dependency_graph(files: Iterable[Path]):
+    graph = {get_full_module_name(f): get_file_deps(f) for f in files}
+
+    for mod, deps in graph.items():
+        if mod in deps:
+            deps.remove(mod)
+
+    return graph
 
 
 def path_mod_gen(base: Path, pkg_root: Path = None) -> Iterator[Tuple[Path, str]]:
@@ -91,19 +132,33 @@ def paths_to_modules(base: Path) -> Dict[Path, Set[str]]:
     return {p: pkg for p, pkg in path_mod_gen(base)}
 
 
-def changed_reload_order(changed_files: Iterable[Path], file_mod_map: Mapping[Path, str]) -> List[str]:
+def changed_reload_order(
+    changed_files: Iterable[Path],
+    files_to_modules: Mapping[Path, str],
+    dependency_graph: Mapping[Path, Set[str]],
+) -> List[str]:
     """Reloads Python packages based on what Python files have changed.
 
     Args:
         changed_files (Iterable[Path]): Iterable of Path objects to the changed files
-        file_mod_map (Mapping[Path, str]): Mapping of Path objects to Python files and the module name that would import them
+        file_mod_map (Mapping[Path, str]): Mapping of Paths to Python files and the module name that would import them
+        module_deps: (Mapping[Path, Set[str]]): Mapping of Paths to Python files and the set of importable module names they depend on
     """
     for changed in changed_files:
-        if changed not in file_mod_map:
+        if changed not in files_to_modules:
             logger.warning(f"{changed} not in mapping")
 
     # find package dependency graph based on changed files
-    changed_deps = {file_mod_map[f]: get_module_deps(f) for f in changed_files}
+    changed_deps = {files_to_modules[f]: get_file_deps(f) for f in changed_files}
+
+    changed_deps = {
+        files_to_modules[f]: set(
+            files_to_modules[p] for p, deps in dependency_graph.items() if files_to_modules[f] in deps
+        )
+        for f in changed_files
+    }
+
+    # changed_modules = list((file_mod_map[f], module_deps[f]) for f in changed_files)
 
     # remove the own package for init files
     changed_deps = {pkg: set(d for d in deps if d != pkg) for pkg, deps in changed_deps.items()}
@@ -127,11 +182,64 @@ def changed_reload_order(changed_files: Iterable[Path], file_mod_map: Mapping[Pa
     #         print(f'Imported {pkg}')
 
 
+Graph = Mapping[str, Set[str]]
+
+
+def get_all_nodes(deps: Graph) -> Set[str]:
+    """Gets all the unique items in the graph - either in nodes or edges"""
+
+    def _gen():
+        for node, node_deps in deps.items():
+            yield node
+            yield from node_deps
+
+    return set(_gen())
+
+
+def reverse_graph(graph: Graph) -> Graph:
+    """Reverses the direction of the graph."""
+    reversed_graph = {n: set() for n in get_all_nodes(graph)}
+
+    for module, dependencies in graph.items():
+        for dependency in dependencies:
+            reversed_graph[dependency].add(module)
+
+    return reversed_graph
+
+
+def find_all_dependents(base_nodes: Iterable[str], reversed_deps: Graph, visited: Set[str] = None) -> Set[str]:
+    """Finds the set of nodes that are dependent or indirectly dependent on the base node"""
+    base_nodes = [base_nodes] if isinstance(base_nodes, str) else base_nodes
+    visited = visited or set()
+
+    for base_node in base_nodes:
+        if base_node not in reversed_deps:
+            continue
+
+        for dependent in reversed_deps[base_node]:
+            if dependent not in visited:
+                visited.add(dependent)
+                find_all_dependents([dependent], reversed_deps, visited)
+
+    return visited
+
+
 class CircularDependency(Exception):
     pass
 
 
-def topo_sort(graph: dict[str, set[str]]) -> list[str]:
+def topo_sort(graph: Graph) -> list[str]:
+    """Topological sort
+
+    Args:
+        graph (Mapping[str, Set[str]]): Dependency graph
+
+    Raises:
+        CircularDependency: Raised if a cycle is detected
+
+    Returns:
+        list[str]: Ordered list of the nodes
+    """
     visited = list()
     stack = list()
     rec_stack = set()  # Set to track nodes in the current recursion stack

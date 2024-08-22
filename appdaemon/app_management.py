@@ -20,7 +20,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Set, Union
 
 import appdaemon.utils as utils
-from appdaemon.dependency import paths_to_modules
+from appdaemon.dependency import find_all_dependents, get_dependency_graph, paths_to_modules, reverse_graph, topo_sort
 from appdaemon.models.app_config import AllAppConfig, AppConfig, GlobalModule, GlobalModules
 from appdaemon.models.internal.file_check import FileCheck
 
@@ -166,6 +166,8 @@ class AppManagement:
 
     mtimes_config: FileCheck = FileCheck()
     mtimes_python: FileCheck = FileCheck()
+
+    module_dependencies: Dict[str, Set[str]] = {}
 
     app_config: AllAppConfig = AllAppConfig({})
     """Keeps track of which module and class each app comes from, along with any associated global modules. Gets set at the end of :meth:`~appdaemon.app_management.AppManagement.check_config`.
@@ -702,7 +704,7 @@ class AppManagement:
     # Run in executor
     def check_app_config_files(self):
         """Sets the self.config_file_check attribute to a fresh instance of FileCheck that has been compared to the previous run."""
-        current_config_files = FileCheck.from_iterable(self.get_app_config_files())
+        current_config_files = FileCheck.from_paths(self.get_app_config_files())
         current_config_files.compare_to_previous(self.mtimes_config)
 
         for file in sorted(current_config_files.new):
@@ -850,12 +852,18 @@ class AppManagement:
 
     # noinspection PyBroadException
     # Run in executor
-    def read_app(self, module_name: str, reload: bool):
+    def read_app(self, module_name: str):
         """Reads an app into memory by importing or reloading the module it needs"""
 
         if mod := sys.modules.get(module_name):
-            self.logger.info("Recursively reloading '%s'", module_name)
-            utils.recursive_reload(mod)
+            try:
+                # this check is skip modules that don't come from the app directory
+                Path(mod.__file__).relative_to(self.AD.app_dir)
+            except ValueError:
+                self.logger.debug("Skipping '%s'", module_name)
+            else:
+                self.logger.info("Reloading '%s'", module_name)
+                importlib.reload(mod)
         else:
             self.logger.info("Importing '%s'", module_name)
             importlib.import_module(module_name)
@@ -1000,24 +1008,21 @@ class AppManagement:
             if mode == UpdateMode.INIT:
                 await utils.run_in_executor(self, self._process_import_paths)
 
-            # modules: List[ModuleLoad] = []
-            loading_actions: LoadingActions = await utils.run_in_executor(self, self._check_python_files)
-
-            # gets the unique list of modules and packages used
-            # modules = set(cfg['module'].split('.')[0] for cfg in self.app_config.values())
+            load_order: List[str] = await utils.run_in_executor(self, self._check_python_files)
+            affected_apps = self._add_reload_apps(load_order)
 
             # Refresh app config
             app_actions = await self.check_config()
+            affected_apps |= app_actions.apps_to_initialize
+            affected_apps |= app_actions.apps_to_terminate
 
             await self._check_for_deleted_modules(mode, app_actions)
 
-            app_actions = self._add_reload_apps(app_actions, loading_actions)
-
             await self._restart_plugin(plugin, app_actions)
 
-            failed_to_stop = await self._stop_apps(app_actions, loading_actions)
+            failed_to_stop = await self._stop_apps(app_actions, load_order)
 
-            await self._load_reload_modules(app_actions, loading_actions)
+            await self._load_reload_modules(app_actions, load_order)
 
             if mode == UpdateMode.INIT:
                 self.logger.info(f"Loaded modules: {list(self.modules.values())}")
@@ -1046,6 +1051,7 @@ class AppManagement:
         }
 
         self.paths_to_modules = paths_to_modules(self.AD.app_dir)
+        # self.module_dependencies = {path: get_file_deps(path) for path in self.paths_to_modules.keys()}
 
         # Combine import directories. Having the list sorted will prioritize parent folders over children during import
         import_dirs = sorted(module_parents | package_parents, reverse=True)
@@ -1095,7 +1101,7 @@ class AppManagement:
         module_path = Path(module_obj.__file__)
         return module_path
 
-    def _check_python_files(self) -> LoadingActions:
+    def _check_python_files(self) -> List[str]:
         """Determines which modules and/or packages need to be loaded or reloaded.
 
         The first time, the modules have to be loaded. Every time after that, they should be reloaded.
@@ -1103,30 +1109,35 @@ class AppManagement:
         Part of self.check_app_updates sequence
         """
 
-        current_python_files = FileCheck.from_iterable(self.get_python_files())
+        current_python_files = FileCheck.from_paths(self.get_python_files())
         current_python_files.compare_to_previous(self.mtimes_python)
-
-        loading_actions = LoadingActions()
-
-        for file in current_python_files.new:
-            if not file.with_name("__init__.py").exists():
-                loading_actions.load.add(file.stem)
-            else:
-                pkg_name = self.mod_pkg_map[file]
-                loading_actions.load.add(pkg_name)
-
-        for file in current_python_files.modified:
-            if not file.with_name("__init__.py").exists():
-                loading_actions.reload.add(file.stem)
-            else:
-                pkg_name = self.mod_pkg_map[file]
-                loading_actions.reload.add(pkg_name)
-
-        # for file in current_python_files.deleted:
-        #     return
-
         self.mtimes_python = current_python_files
-        return loading_actions
+
+        if deleted := self.mtimes_python.deleted:
+            set(
+                app_name
+                for app_name, cfg in self.app_config.root.items()
+                if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in deleted
+            )
+
+        # update the dependency graphs
+        files = self.mtimes_python.new | self.mtimes_python.modified
+        if bool(files):
+            dep_graph = get_dependency_graph(files)
+            modules = set(dep_graph.keys())
+            self.module_dependencies.update(dep_graph)
+
+            # reverse the graph and find all the modules that import any of the new/modified modules
+            reversed_graph = reverse_graph(self.module_dependencies)
+            dependents = find_all_dependents(modules, reversed_graph)
+
+            # get the subset of the dependencies that apply to the modules to load
+            to_load = modules | dependents
+            sub_deps = {m: self.module_dependencies[m] for m in to_load}
+            load_order = topo_sort(sub_deps)
+            return load_order
+        else:
+            return []
 
         # for file in self.get_python_files():
         #     modified = file.stat().st_mtime
@@ -1172,21 +1183,23 @@ class AppManagement:
 
         return deleted_modules
 
-    def _add_reload_apps(self, app_actions: AppActions, loading_actions: LoadingActions) -> AppActions:
+    def _add_reload_apps(self, load_order: List[str]) -> Set[str]:
         """Determines which apps needs to be initialized and/or terminated based on which modules will be loaded or reloaded.
 
         If a module is going to be reloaded, it's app needs to be terminated and re-initialized.
 
         Part of self.check_app_updates sequence
         """
-        # globals = self.get_global_modules()
+        # globals
 
         # Find apps that need to be initialized because their module is in the list to load
-        load_apps = set(
-            app_name for module_name in loading_actions.load for app_name in self.apps_per_module(module_name)
+        affected_apps = set(
+            app_name
+            for app_name, cfg in self.app_config.root.items()
+            if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in load_order
         )
-        self.logger.debug("Added apps to init list because their is in the load list: %s", load_apps)
-        app_actions.apps_to_initialize |= load_apps
+        self.logger.debug("%s apps affected by (re)loading modules", len(affected_apps))
+        return affected_apps
 
         # for module_name in loading_actions.load:
         #     for app_name in self.apps_per_module(module_name):
@@ -1196,12 +1209,12 @@ class AppManagement:
         #     if gbl == self.get_module_from_path(module):
         #         for app
 
-        reload_apps = set(
-            app_name for module_name in loading_actions.reload for app_name in self.apps_per_module(module_name)
-        )
-        app_actions.apps_to_initialize |= reload_apps
-        app_actions.apps_to_terminate |= reload_apps
-        return app_actions
+        # reload_apps = set(
+        #     app_name for module_name in reload_order.reload for app_name in self.apps_per_module(module_name)
+        # )
+        # app_actions.apps_to_initialize |= reload_apps
+        # app_actions.apps_to_terminate |= reload_apps
+        # return app_actions
 
         # for module in (loading_actions.load or loading_actions.reload):
         #     for gm in self.get_global_modules():
@@ -1279,11 +1292,11 @@ class AppManagement:
 
         return failed_to_stop
 
-    async def _load_reload_modules(self, app_actions: AppActions, loading_actions: LoadingActions):
+    async def _load_reload_modules(self, app_actions: AppActions, reload_order: List[str]):
         """Calls ``self.read_app`` for each module in the list"""
-        for mod in loading_actions.load or loading_actions.reload:
+        for mod in reload_order:
             try:
-                await utils.run_in_executor(self, self.read_app, mod, mod in loading_actions.reload)
+                await utils.run_in_executor(self, self.read_app, mod)
             except Exception:
                 self.error.warning("-" * 60)
                 self.error.warning("Unexpected error loading module: %s:", mod)
