@@ -126,6 +126,15 @@ class AppInitializeError(Exception):
     pass
 
 
+def executor_decorator(func):
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        self.logger.debug(f"Running in executor...{func.__name__} with {args} and {kwargs}")
+        return await utils.run_in_executor(self, func, self, *args, **kwargs)
+
+    return wrapper
+
+
 class AppManagement:
     """Subsystem container for managing app lifecycles"""
 
@@ -288,7 +297,7 @@ class AppManagement:
     async def increase_inactive_apps(self, name: str):
         """Marks an app as inactive and updates the sensors for active/inactive apps."""
         if name not in self.inactive_apps:
-            self.inactive_apps.append(name)
+            self.inactive_apps.add(name)
 
         if name in self.active_apps:
             self.active_apps.remove(name)
@@ -963,7 +972,8 @@ class AppManagement:
 
             update_actions = UpdateActions()
 
-            await utils.run_in_executor(self, self.check_python_files, update_actions)
+            # await utils.run_in_executor(self, self.check_python_files, update_actions)
+            await self.check_python_files(update_actions)
 
             # Refresh app config
             app_actions = await self.check_config()
@@ -1049,6 +1059,7 @@ class AppManagement:
             and os.access(f, os.R_OK)  # skip unreadable files
         )
 
+    @executor_decorator
     def check_python_files(self, update_actions: UpdateActions) -> List[str]:
         """Checks
 
