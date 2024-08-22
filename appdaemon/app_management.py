@@ -274,6 +274,28 @@ class AppManagement:
         await self.add_entity(self.inactive_apps_sensor, 0, {"friendly_name": "Inactive Apps"})
         await self.add_entity(self.total_apps_sensor, 0, {"friendly_name": "Total Apps"})
 
+    async def increase_active_apps(self, name: str):
+        """Marks an app as active and updates the sensors for active/inactive apps."""
+        if name not in self.active_apps:
+            self.active_apps.add(name)
+
+        if name in self.inactive_apps:
+            self.inactive_apps.remove(name)
+
+        await self.set_state(self.active_apps_sensor, state=len(self.active_apps))
+        await self.set_state(self.inactive_apps_sensor, state=len(self.inactive_apps))
+
+    async def increase_inactive_apps(self, name: str):
+        """Marks an app as inactive and updates the sensors for active/inactive apps."""
+        if name not in self.inactive_apps:
+            self.inactive_apps.append(name)
+
+        if name in self.active_apps:
+            self.active_apps.remove(name)
+
+        await self.set_state(self.active_apps_sensor, state=len(self.active_apps))
+        await self.set_state(self.inactive_apps_sensor, state=len(self.inactive_apps))
+
     async def terminate(self):
         self.logger.debug("terminate() called for app_management")
         if self.apps_initialized is True:
@@ -1488,25 +1510,3 @@ class AppManagement:
                 self.AD.production_mode = mode
 
             return result
-
-    async def increase_active_apps(self, name: str):
-        """Marks an app as active and updates the sensors for active/inactive apps."""
-        if name not in self.active_apps:
-            self.active_apps.add(name)
-
-        if name in self.inactive_apps:
-            self.inactive_apps.remove(name)
-
-        await self.set_state(self.active_apps_sensor, state=len(self.active_apps))
-        await self.set_state(self.inactive_apps_sensor, state=len(self.inactive_apps))
-
-    async def increase_inactive_apps(self, name: str):
-        """Marks an app as inactive and updates the sensors for active/inactive apps."""
-        if name not in self.inactive_apps:
-            self.inactive_apps.append(name)
-
-        if name in self.active_apps:
-            self.active_apps.remove(name)
-
-        await self.set_state(self.active_apps_sensor, state=len(self.active_apps))
-        await self.set_state(self.inactive_apps_sensor, state=len(self.inactive_apps))
