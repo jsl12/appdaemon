@@ -507,8 +507,11 @@ class AppManagement:
             module_path = await utils.run_in_executor(self, os.path.abspath, mod_obj.__file__)
             await self.set_state(app_name, module_path=module_path)
 
-    def get_managed_app_names(self) -> Set[str]:
-        return set(name for name, o in self.objects.items() if o.type == "app")
+    def get_managed_app_names(self, include_globals: bool = False) -> Set[str]:
+        apps = set(name for name, o in self.objects.items() if o.type == "app")
+        if include_globals:
+            apps |= set(name for name, cfg in self.app_config.root.items() if isinstance(cfg, GlobalModule))
+        return apps
 
     def init_plugin_object(self, name: str, object, use_dictionary_unpacking: bool = False) -> None:
         self.objects[name] = ManagedObject(
@@ -637,7 +640,7 @@ class AppManagement:
         if self.mtimes_config.there_were_changes:
             self.logger.debug(" Config file changes ".center(75, "="))
             new_full_config: AllAppConfig = await self.read_all(self.mtimes_config.paths)
-            current_app_names = self.get_managed_app_names()
+            current_app_names = self.get_managed_app_names(include_globals=True)
 
             for name, cfg in new_full_config.root.items():
                 if name in self.non_apps:
@@ -649,6 +652,7 @@ class AppManagement:
                 else:
                     # If an app exists, compare to the current config
                     if cfg != self.app_config.root[name]:
+                        self.logger.info(f"App config modified: {name}")
                         update_actions.apps.reload.add(name)
 
             update_actions.apps.term = set(name for name in current_app_names if name not in self.app_config)
