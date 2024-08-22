@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Dict, Union
 
 import async_timeout
 
-import appdaemon.utils as utils
 from appdaemon.app_management import UpdateMode
 
 if TYPE_CHECKING:
@@ -22,6 +21,9 @@ class PluginBase:
 
     AD: "AppDaemon"
     logger: Logger
+    plugin_meta: Dict[str, Dict]
+    plugins: Dict[str, Dict]
+
     bytes_sent: int
     bytes_recv: int
     requests_sent: int
@@ -249,9 +251,7 @@ class Plugins:
                 plugin_namespace = self.plugins[name]["namespace"]
                 return self.plugin_objs[plugin_namespace]["object"]
 
-        return None
-
-    def get_plugin_from_namespace(self, namespace):
+    def get_plugin_from_namespace(self, namespace: str):
         if self.plugins is not None:
             for name in self.plugins:
                 if "namespace" in self.plugins[name] and self.plugins[name]["namespace"] == namespace:
@@ -260,8 +260,6 @@ class Plugins:
                     return name
                 elif "namespace" not in self.plugins[name] and namespace == "default":
                     return name
-        else:
-            return None
 
     async def notify_plugin_started(self, name, ns, meta, state, first_time=False):
         self.logger.debug("Plugin started: %s", name)
@@ -287,30 +285,19 @@ class Plugins:
                 if namespaces != []:  # there are multiple namesapces
                     for namesp in namespaces:
                         if state[namesp] is not None:
-                            await utils.run_in_executor(
-                                self,
-                                self.AD.state.set_namespace_state,
-                                namesp,
-                                state[namesp],
-                                self.plugins[name].get("persist_entities", False),
+                            await self.AD.state.set_namespace_state(
+                                namesp, state[namesp], self.plugins[name].get("persist_entities", False)
                             )
 
-                    #
                     # now set the main namespace
-                    #
-
-                    await utils.run_in_executor(
-                        self,
-                        self.AD.state.set_namespace_state,
+                    await self.AD.state.set_namespace_state(
                         namespace,
                         state[namespace],
                         self.plugins[name].get("persist_entities", False),
                     )
 
                 else:
-                    await utils.run_in_executor(
-                        self,
-                        self.AD.state.set_namespace_state,
+                    await self.AD.state.set_namespace_state(
                         namespace,
                         state,
                         self.plugins[name].get("persist_entities", False),
@@ -364,8 +351,6 @@ class Plugins:
             elif "namespaces" in self.plugins[name] and namespace in self.plugins[name]["namespaces"]:
                 plugin_namespace = self.plugins[name]["namespace"]
                 return self.plugin_meta[plugin_namespace]
-
-        return None
 
     async def wait_for_plugins(self):
         initialized = False

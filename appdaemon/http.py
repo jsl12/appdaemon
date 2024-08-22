@@ -577,7 +577,7 @@ class HTTP:
     async def get_namespaces(self, request):
         try:
             self.logger.debug("get_namespaces() called)")
-            state = await self.AD.state.list_namespaces()
+            state = self.AD.state.list_namespaces()
             self.logger.debug("result = %s", state)
 
             return web.json_response({"state": state}, dumps=utils.convert_json)

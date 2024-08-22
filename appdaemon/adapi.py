@@ -572,7 +572,7 @@ class ADAPI:
             >>> self.list_namespaces()
 
         """
-        return await self.AD.state.list_namespaces()
+        return self.AD.state.list_namespaces()
 
     @utils.sync_decorator
     async def save_namespace(self, **kwargs) -> None:

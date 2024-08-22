@@ -16,7 +16,7 @@ from enum import Enum
 from functools import reduce, wraps
 from logging import Logger
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Set, Union, Self
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Self, Set, Union
 
 import appdaemon.utils as utils
 from appdaemon.dependency import (
@@ -206,6 +206,7 @@ class AppManagement:
         self.active_apps = set()
         self.inactive_apps = set()
 
+        # Apply the profiler_decorator if the config option is enabled
         if self.AD.check_app_updates_profile:
             self.check_app_updates = self.profiler_decorator(self.check_app_updates)
 
@@ -578,8 +579,6 @@ class AppManagement:
         models = [m.model_dump(by_alias=True, exclude_unset=True) for m in config_model_factory() if m is not None]
         combined_configs = reduce(update, models, {})
         return AllAppConfig.model_validate(combined_configs)
-        # self.app_config = AllAppConfig.model_validate(combined_configs)
-        # return self.app_config
 
     async def check_sequence_update(self, sequence_config):
         if self.app_config.get("sequences", {}) != sequence_config:
@@ -624,6 +623,7 @@ class AppManagement:
             self.logger.debug("Detected app config file deletion: %s", file.relative_to(self.AD.app_dir.parent))
 
         if self.mtimes_config.there_were_changes:
+            self.logger.debug(" Config file changes ".center(75, "="))
             new_full_config: AllAppConfig = await self.read_all(self.mtimes_config.paths)
             current_app_names = self.get_managed_app_names()
 
@@ -660,117 +660,6 @@ class AppManagement:
             if isinstance(cfg, AppConfig):
                 cfg.config_path = file
         return config_model
-
-    # noinspection PyBroadException
-    async def check_config(self, silent: bool = False, add_threads: bool = True) -> Optional[AppActions]:  # noqa: C901
-        """Wraps :meth:`~AppManagement.read_config`
-
-        # TODO eliminate arguments
-
-        Args:
-            silent (bool, optional): _description_. Defaults to False.
-            add_threads (bool, optional): _description_. Defaults to True.
-
-        Returns:
-            AppActions object with information about which apps to initialize and/or terminate. Returns None if self.read_config() returns None
-        """
-        actions = AppActions()
-        try:
-            if self.mtimes_config.there_were_changes:
-                # TODO this part needs to be rethought. We still need to calculate which apps are new
-                new_full_config = self.mtimes_config
-
-                # Check for changes and deletions
-                for app_name, cfg in self.app_config.app_definitions():
-                    # Check the newly loaded full config for a config for this app's name
-                    if mod_cfg := new_full_config.root.get(app_name):
-                        # Update the config_path attribute of the app state
-                        await self.set_state(app_name, config_path=mod_cfg.config_path)
-
-                        if mod_cfg != cfg:
-                            # Something changed, clear and reload
-                            if not silent:
-                                self.logger.info("App '%s' changed", app_name)
-                            actions.apps_to_terminate.add(app_name)
-                            actions.apps_to_initialize.add(app_name)
-
-                    else:
-                        # if it wasn't found, then it was deleted
-                        if not silent:
-                            self.logger.info("App '%s' deleted", app_name)
-
-                        # Since the entry has been deleted we can't sensibly determine dependencies
-                        # So just immediately terminate it
-                        await self.terminate_app(app_name, delete=True)
-                        await self.remove_entity(app_name)
-                        # actions.apps_to_terminate.add(name)
-
-                # Check for added app configs
-                for app_name, mod_cfg in new_full_config.root.items():
-                    if app_name in self.non_apps:
-                        continue  # skip non-apps
-
-                    # Check for new config section
-                    if app_name not in self.app_config:
-                        # if config_path := new_cfg.pop("config_path"):
-                        #     config_path = await utils.run_in_executor(self, os.path.abspath, config_path)
-
-                        if "class" in mod_cfg and "module" in mod_cfg:
-                            # first we need to remove the config path if it exists
-                            if config_path := mod_cfg.pop("config_path"):
-                                config_path = await utils.run_in_executor(self, os.path.abspath, config_path)
-
-                            self.logger.info("App '%s' added", app_name)
-                            actions.apps_to_initialize.add(app_name)
-                            await self.add_entity(
-                                name=app_name,
-                                state="loaded",
-                                attributes={
-                                    "totalcallbacks": 0,
-                                    "instancecallbacks": 0,
-                                    "args": mod_cfg,
-                                    "config_path": config_path,
-                                },
-                            )
-                        else:
-                            if self.AD.invalid_config_warnings and not silent:
-                                self.logger.warning("App '%s' missing 'class' or 'module' entry - ignoring", app_name)
-
-                self.app_config = new_full_config
-                actions.total_apps = self.app_config.active_app_count
-
-                for app_name in self.non_apps:
-                    if app_name in self.app_config:
-                        actions.total_apps -= 1  # remove one
-
-                actions.active, inactive, glbl = self.app_config.get_active_app_count()
-
-                # if silent is False:
-                await self.set_state(
-                    self.total_apps_sensor,
-                    state=actions.active + inactive,
-                    attributes={"friendly_name": "Total Apps"},
-                )
-
-                self.logger.info("Found %s active apps", actions.active)
-                self.logger.info("Found %s inactive apps", inactive)
-                self.logger.info("Found %s global libraries", glbl)
-
-            # Now we know if we have any new apps we can create new threads if pinning
-            actions.active, inactive, glbl = self.app_config.get_active_app_count()
-
-            if self.AD.threading.auto_pin:
-                if actions.active > self.AD.threading.thread_count:
-                    for i in range(actions.active - self.AD.threading.thread_count):
-                        await self.AD.threading.add_thread(False, True)
-
-            return actions
-        except Exception:
-            self.logger.warning("-" * 60)
-            self.logger.warning("Unexpected error:")
-            self.logger.warning("-" * 60)
-            self.logger.warning(traceback.format_exc())
-            self.logger.warning("-" * 60)
 
     # noinspection PyBroadException
     @utils.executor_decorator
@@ -908,14 +797,6 @@ class AppManagement:
         # Get the parent directories so the ones with __init__.py are importable
         package_parents = set(p.parent for p in top_packages_dirs)
 
-        # # keeps track of which modules go to which packages
-        # self.mod_pkg_map: Dict[Path, str] = {
-        #     module_file: dir.stem for dir in top_packages_dirs for module_file in dir.rglob("*.py")
-        # }
-
-        # self.paths_to_modules = paths_to_modules(self.AD.app_dir)
-        # self.module_dependencies = {path: get_file_deps(path) for path in self.paths_to_modules.keys()}
-
         # Combine import directories. Having the list sorted will prioritize parent folders over children during import
         import_dirs = sorted(module_parents | package_parents, reverse=True)
 
@@ -1005,21 +886,6 @@ class AppManagement:
         if to_delete:
             self.logger.debug(f"Removing apps because of deleted Python files: {to_delete}")
             update_actions.apps.term |= to_delete
-
-        # affected_module_names = set(load_order) | deleted_module_names | deleted_dependants
-
-        # deleted_modules = []
-
-        # for file in list(self.monitored_files.keys()):
-        #     if not Path(file).exists() or mode == UpdateMode.TERMINATE:
-        #         self.logger.info("Removing module %s", file)
-        #         del self.monitored_files[file]
-        #         for app in self.apps_per_module(self.get_module_from_path(file)):
-        #             apps.apps_to_terminate.add(app)
-
-        #         deleted_modules.append(file)
-
-        # return deleted_modules
 
     def _add_reload_apps(self, update_actions: UpdateActions):
         """Determines which apps are going to be affected by the modules that will be (re)loaded.

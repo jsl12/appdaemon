@@ -13,12 +13,19 @@ from appdaemon.version import __version__
 
 class PluginConfig(BaseModel, extra="allow"):
     type: str
+    persist_entities: bool = False
+    namespace: Optional[str] = None
 
 
 class FilterConfig(BaseModel):
     command_line: str
     input_ext: str
     output_ext: str
+
+
+class NamespaceConfig(BaseModel):
+    writeback: Literal["safe", "hybrid"] = "safe"
+    persist: bool = False
 
 
 class AppDaemonConfig(BaseModel, extra="forbid"):
@@ -65,7 +72,7 @@ class AppDaemonConfig(BaseModel, extra="forbid"):
     uvloop: bool = False
     use_stream: bool = False
     import_paths: List[Path] = []
-    namespaces: Dict[str, Dict] = {}
+    namespaces: Dict[str, NamespaceConfig] = {}
     exclude_dirs: List[str] = []
     cert_verify: bool = True
     disable_apps: bool = False
