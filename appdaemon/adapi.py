@@ -1461,7 +1461,7 @@ class ADAPI:
             return await self.get_entity_api(namespace, entity_id).listen_state(callback, **kwargs)
 
     @utils.sync_decorator
-    async def cancel_listen_state(self, handle: str) -> bool:
+    async def cancel_listen_state(self, handle: str, silent: bool = False) -> bool:
         """Cancels a ``listen_state()`` callback.
 
         This will mean that the App will no longer be notified for the specific
