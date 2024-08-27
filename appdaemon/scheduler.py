@@ -6,7 +6,7 @@ import re
 import traceback
 import uuid
 from collections import OrderedDict
-from datetime import timedelta
+from datetime import timedelta, timezone
 from logging import Logger
 from typing import TYPE_CHECKING
 
@@ -40,7 +40,7 @@ class Scheduler:
         self.location = None
         self.schedule = {}
 
-        self.now = datetime.datetime.now(datetime.UTC)
+        self.now = datetime.datetime.now(timezone.utc)
 
         #
         # If we were waiting for a timezone from metadata, we have it now.

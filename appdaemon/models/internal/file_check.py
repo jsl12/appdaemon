@@ -1,6 +1,6 @@
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Self, Set
+from typing import Any, Dict, Iterable, Set
 from pydantic import BaseModel, Field
 
 
@@ -11,7 +11,7 @@ class FileCheck(BaseModel):
     deleted: Set[Path] = Field(default_factory=set)
 
     @classmethod
-    def from_paths(cls, iter: Iterable[Path]) -> Self:
+    def from_paths(cls, iter: Iterable[Path]):
         return cls(mtimes={p: p.stat().st_mtime for p in iter})
 
     def model_post_init(self, __context: Any):

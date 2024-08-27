@@ -1,7 +1,7 @@
 from abc import ABC
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Self
+from typing import Iterable
 
 from .dependency import find_all_dependents, get_dependency_graph, reverse_graph
 from .models.app_config import AllAppConfig, AppConfig
@@ -19,11 +19,11 @@ class Dependencies(ABC):
         self.rev_graph = reverse_graph(self.dep_graph)
 
     @classmethod
-    def from_path(cls: Self, path: Path):
+    def from_path(cls, path: Path):
         return cls.from_paths(path.rglob(f"*{cls.ext}"))
 
     @classmethod
-    def from_paths(cls: Self, paths: Iterable[Path]):
+    def from_paths(cls, paths: Iterable[Path]):
         return cls(files=FileCheck.from_paths(paths))
 
     def get_dependents(self, items: Iterable[str]) -> set[str]:
