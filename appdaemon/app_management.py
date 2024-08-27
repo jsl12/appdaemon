@@ -16,7 +16,7 @@ from enum import Enum
 from functools import reduce, wraps
 from logging import Logger
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Literal, Optional, Self, Set, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Literal, Optional, Set, Union
 
 import appdaemon.utils as utils
 from appdaemon.dependency import (
@@ -568,7 +568,7 @@ class AppManagement:
                     error_text=f"Unexepected error while reading {rel_path}",
                     # finally_text=f"{rel_path} read finish",
                 )
-                async def safe_read(self: Self, path: Path):
+                async def safe_read(self, path: Path):
                     return await self.read_config_file(path)
 
                 new_cfg: AllAppConfig = await safe_read(self, path)
@@ -986,7 +986,7 @@ class AppManagement:
                         success_text=f"Started '{app_name}'",
                         error_text=f"Error starting app '{app_name}' from {rel_path}",
                     )
-                    async def safe_start(self: Self):
+                    async def safe_start(self):
                         try:
                             await self.start_app(app_name)
                         except Exception:
@@ -1003,7 +1003,7 @@ class AppManagement:
             for module_name in load_order:
 
                 @utils.warning_decorator(error_text=f"Error importing '{module_name}'")
-                async def safe_import(self: Self):
+                async def safe_import(self):
                     try:
                         await self.import_module(module_name)
                     except Exception:
