@@ -94,12 +94,10 @@ class AllAppConfig(RootModel):
 
     @classmethod
     def from_config_file(cls, path: Path):
-        """Not used, debug only"""
         return cls.model_validate(read_config_file(path))
 
     @classmethod
     def from_config_files(cls, paths: Iterable[Path]):
-        """Not used, debug only"""
         paths = iter(paths)
         self = cls.from_config_file(next(paths))
         for p in paths:

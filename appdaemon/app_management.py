@@ -27,6 +27,7 @@ from appdaemon.dependency import (
     reverse_graph,
     topo_sort,
 )
+from appdaemon.dependency_manager import DependencyManager
 from appdaemon.models.app_config import AllAppConfig, AppConfig, GlobalModule
 from appdaemon.models.internal.file_check import FileCheck
 
@@ -154,12 +155,7 @@ class AppManagement:
     check_app_updates_profile_stats: str = ""
     check_updates_lock: asyncio.Lock = asyncio.Lock()
 
-    mtimes_config: FileCheck
-    """Keeps track of the new, modified, and deleted app configuration files
-    """
-    mtimes_python: FileCheck
-    """Keeps track of the new, modified, and deleted Python files
-    """
+    dependency_manager: DependencyManager
 
     module_dependencies: Dict[str, Set[str]] = {}
     """Dictionary that maps full module names to sets of those that they depend on
@@ -201,7 +197,6 @@ class AppManagement:
         self.AD.services.register_service("admin", "app", "edit", self.manage_services)
         self.AD.services.register_service("admin", "app", "remove", self.manage_services)
 
-        self.mtimes_config = FileCheck()
         self.mtimes_python = FileCheck()
 
         self.active_apps = set()
@@ -210,6 +205,14 @@ class AppManagement:
         # Apply the profiler_decorator if the config option is enabled
         if self.AD.check_app_updates_profile:
             self.check_app_updates = self.profiler_decorator(self.check_app_updates)
+
+    @property
+    def config_filecheck(self) -> FileCheck:
+        return self.dependency_manager.app_deps.files
+
+    @property
+    def python_filecheck(self) -> FileCheck:
+        return self.dependency_manager.python_deps.files
 
     # @warning_decorator
     async def set_state(self, name: str, **kwargs):
@@ -552,7 +555,7 @@ class AppManagement:
         return True
 
     async def read_all(self, config_files: Iterable[Path] = None) -> AllAppConfig:
-        config_files = config_files or set(self.mtimes_config.paths)
+        config_files = config_files or self.dependency_manager.config_files
 
         async def config_model_factory():
             """Creates a generator that sets the config_path of app configs"""
@@ -626,20 +629,20 @@ class AppManagement:
     async def check_app_config_files(self, update_actions: UpdateActions):
         """Updates self.mtimes_config and self.app_config"""
         config_files = await self.get_app_config_files()
-        self.mtimes_config.update(config_files)
+        self.config_filecheck.update(config_files)
 
-        for file in sorted(self.mtimes_config.new):
+        for file in sorted(self.config_filecheck.new):
             self.logger.debug("New app config file: %s", file.relative_to(self.AD.app_dir.parent))
 
-        for file in sorted(self.mtimes_config.modified):
+        for file in sorted(self.config_filecheck.modified):
             self.logger.debug("Detected app config file modification: %s", file.relative_to(self.AD.app_dir.parent))
 
-        for file in sorted(self.mtimes_config.deleted):
+        for file in sorted(self.config_filecheck.deleted):
             self.logger.debug("Detected app config file deletion: %s", file.relative_to(self.AD.app_dir.parent))
 
-        if self.mtimes_config.there_were_changes:
+        if self.config_filecheck.there_were_changes:
             self.logger.debug(" Config file changes ".center(75, "="))
-            new_full_config: AllAppConfig = await self.read_all(self.mtimes_config.paths)
+            new_full_config: AllAppConfig = await self.read_all(self.config_filecheck.paths)
             current_app_names = self.get_managed_app_names(include_globals=True)
 
             for name, cfg in new_full_config.root.items():
@@ -775,6 +778,7 @@ class AppManagement:
 
             if mode == UpdateMode.INIT:
                 await self._process_import_paths()
+                await self._init_dep_manager()
 
             update_actions = UpdateActions()
 
@@ -837,6 +841,10 @@ class AppManagement:
 
             self.add_to_import_path(path)
 
+    @utils.executor_decorator
+    def _init_dep_manager(self):
+        self.dependency_manager = DependencyManager(self.AD.app_dir)
+
     def get_python_files(self) -> Iterable[Path]:
         """Iterates through *.py in the app directory. Excludes directory names defined in exclude_dirs and with a "." character. Also excludes files that aren't readable."""
         return set(
@@ -864,24 +872,24 @@ class AppManagement:
 
         Part of self.check_app_updates sequence
         """
-        self.mtimes_python.update(self.get_python_files())
+        self.python_filecheck.update(self.get_python_files())
 
-        if self.mtimes_python.there_were_changes:
+        if self.python_filecheck.there_were_changes:
             self.logger.debug(" Python file changes ".center(75, "="))
 
-        if new := self.mtimes_python.new:
+        if new := self.python_filecheck.new:
             self.logger.info("New Python files: %s", len(new))
             dep_graph = get_dependency_graph(new)
             self.module_dependencies.update(dep_graph)
             update_actions.modules.init = set(dep_graph.keys())
 
-        if mod := self.mtimes_python.modified:
+        if mod := self.python_filecheck.modified:
             self.logger.info("Modified Python files: %s", len(mod))
             dep_graph = get_dependency_graph(mod)
             self.module_dependencies.update(dep_graph)
             update_actions.modules.reload = set(dep_graph.keys())
 
-        if deleted := self.mtimes_python.deleted:
+        if deleted := self.python_filecheck.deleted:
             self.logger.info("Deleted Python files: %s", len(deleted))
             deleted_modules = set(map(get_full_module_name, deleted))
             update_actions.modules.term = deleted_modules
@@ -894,7 +902,7 @@ class AppManagement:
     def _check_for_deleted_modules(self, update_actions: UpdateActions):
         """Check for deleted modules and add them to the terminate list in the apps dict. Part of self.check_app_updates sequence"""
 
-        deleted_module_names = set(map(get_full_module_name, self.mtimes_python.deleted))
+        deleted_module_names = set(map(get_full_module_name, self.python_filecheck.deleted))
         deleted_module_names |= find_all_dependents(deleted_module_names, self.reversed_graph)
 
         to_delete = set(

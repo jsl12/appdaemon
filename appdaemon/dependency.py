@@ -1,7 +1,7 @@
 import ast
 import logging
 from pathlib import Path
-from typing import Dict, Iterable, Set
+from typing import Iterable
 
 logger = logging.getLogger("AppDaemon._app_management")
 
@@ -64,7 +64,7 @@ class DependencyResolutionFail(Exception):
         self.base_exception = base_exception
 
 
-def get_file_deps(file_path: Path) -> Set[str]:
+def get_file_deps(file_path: Path) -> set[str]:
     """Parses the content of the Python file to find which modules and/or packages it imports.
 
     Args:
@@ -107,12 +107,12 @@ def get_dependency_graph(files: Iterable[Path]):
     return graph
 
 
-def get_all_nodes(deps: Dict[str, Set[str]]) -> Set[str]:
+def get_all_nodes(deps: dict[str, set[str]]) -> set[str]:
     """Retrieve all unique nodes present in the graph, whether they appear as keys (nodes)
     or values (edges).
 
     Args:
-        deps (Dict[str, Set[str]]): A dictionary representing the graph where keys are node names and values are sets of dependent node names.
+        deps (dict[str, set[str]]): A dictionary representing the graph where keys are node names and values are sets of dependent node names.
 
     Returns:
         A set containing all unique nodes in the graph.
@@ -127,7 +127,7 @@ def get_all_nodes(deps: Dict[str, Set[str]]) -> Set[str]:
     return set(_gen())
 
 
-def reverse_graph(graph: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
+def reverse_graph(graph: dict[str, set[str]]) -> dict[str, set[str]]:
     """Reverse the direction of edges in the given graph.
 
     Args:
@@ -147,14 +147,14 @@ def reverse_graph(graph: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
 
 
 def find_all_dependents(
-    base_nodes: Iterable[str], reversed_deps: Dict[str, Set[str]], visited: Set[str] = None
-) -> Set[str]:
+    base_nodes: Iterable[str], reversed_deps: dict[str, set[str]], visited: set[str] = None
+) -> set[str]:
     """Recursively find all nodes that depend on the specified base nodes.
 
     Args:
         base_nodes (Iterable[str]): A list or set of base node names to start the search from.
         reversed_deps (Graph): A dictionary representing the reversed graph where keys are node names and values are sets of nodes that depend on the key node.
-        visited (Set[str], optional): A set of nodes that have already been visited. Defaults to None.
+        visited (set[str], optional): A set of nodes that have already been visited. Defaults to None.
 
     Returns:
         A set of all nodes that depend on the base nodes either directly or indirectly.
@@ -178,11 +178,11 @@ class CircularDependency(Exception):
     pass
 
 
-def topo_sort(graph: Dict[str, Set[str]]) -> list[str]:
+def topo_sort(graph: dict[str, set[str]]) -> list[str]:
     """Topological sort
 
     Args:
-        graph (Mapping[str, Set[str]]): Dependency graph
+        graph (Mapping[str, set[str]]): Dependency graph
 
     Raises:
         CircularDependency: Raised if a cycle is detected
