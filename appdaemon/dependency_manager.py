@@ -16,7 +16,14 @@ class Dependencies(ABC):
     rev_graph: dict[str, set[str]] = field(init=False)
 
     def __post_init__(self):
-        self.rev_graph = reverse_graph(self.dep_graph)
+        self.refresh_dep_graph()
+
+    def update(self, new_files: Iterable[Path]):
+        self.files.update(new_files)
+        self.refresh_dep_graph()
+
+    def refresh_dep_graph(self):
+        raise NotImplementedError
 
     @classmethod
     def from_path(cls, path: Path):
@@ -36,9 +43,9 @@ class Dependencies(ABC):
 class PythonDeps(Dependencies):
     ext: str = ".py"
 
-    def __post_init__(self):
+    def refresh_dep_graph(self):
         self.dep_graph = get_dependency_graph(self.files)
-        super().__post_init__()
+        self.rev_graph = reverse_graph(self.dep_graph)
 
 
 @dataclass
@@ -48,8 +55,11 @@ class AppDeps(Dependencies):
 
     def __post_init__(self):
         self.app_config = AllAppConfig.from_config_files(self.files)
-        self.dep_graph = self.app_config.depedency_graph()
         super().__post_init__()
+
+    def refresh_dep_graph(self):
+        self.dep_graph = self.app_config.depedency_graph()
+        self.rev_graph = reverse_graph(self.dep_graph)
 
     def direct_app_deps(self, modules: Iterable[str]):
         """Find the apps that directly depend on any of the given modules"""
