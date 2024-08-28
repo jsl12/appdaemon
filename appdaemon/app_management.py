@@ -157,9 +157,6 @@ class AppManagement:
 
     dependency_manager: DependencyManager
 
-    module_dependencies: Dict[str, Set[str]] = {}
-    """Dictionary that maps full module names to sets of those that they depend on
-    """
     reversed_graph: Dict[str, Set[str]] = {}
     """Dictionary that maps full module names to sets of those that depend on them
     """
@@ -213,6 +210,10 @@ class AppManagement:
     @property
     def python_filecheck(self) -> FileCheck:
         return self.dependency_manager.python_deps.files
+
+    @property
+    def module_dependencies(self) -> Dict[str, Set[str]]:
+        return self.dependency_manager.python_deps.dep_graph
 
     # @warning_decorator
     async def set_state(self, name: str, **kwargs):
@@ -844,6 +845,7 @@ class AppManagement:
     @utils.executor_decorator
     def _init_dep_manager(self):
         self.dependency_manager = DependencyManager(self.AD.app_dir)
+        self.config_filecheck.mtimes = {}
 
     def get_python_files(self) -> Iterable[Path]:
         """Iterates through *.py in the app directory. Excludes directory names defined in exclude_dirs and with a "." character. Also excludes files that aren't readable."""
@@ -880,13 +882,13 @@ class AppManagement:
         if new := self.python_filecheck.new:
             self.logger.info("New Python files: %s", len(new))
             dep_graph = get_dependency_graph(new)
-            self.module_dependencies.update(dep_graph)
+            # self.module_dependencies.update(dep_graph)
             update_actions.modules.init = set(dep_graph.keys())
 
         if mod := self.python_filecheck.modified:
             self.logger.info("Modified Python files: %s", len(mod))
             dep_graph = get_dependency_graph(mod)
-            self.module_dependencies.update(dep_graph)
+            # self.module_dependencies.update(dep_graph)
             update_actions.modules.reload = set(dep_graph.keys())
 
         if deleted := self.python_filecheck.deleted:
