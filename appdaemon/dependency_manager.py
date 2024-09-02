@@ -9,7 +9,6 @@ from .dependency import (
     reverse_graph,
     get_full_module_name,
     topo_sort,
-    get_all_nodes,
 )
 from .models.app_config import AllAppConfig, AppConfig
 from .models.internal.file_check import FileCheck
@@ -60,10 +59,8 @@ class PythonDeps(Dependencies):
         self.rev_graph = reverse_graph(self.dep_graph)
 
     def modules_to_import(self) -> set[str]:
-        sub_graph = {
-            (mod := get_full_module_name(file)): self.dep_graph[mod] for file in (self.files.new | self.files.modified)
-        }
-        nodes = get_all_nodes(sub_graph)
+        files = self.files.new | self.files.modified
+        nodes = set(get_full_module_name(file) for file in files)
         return nodes
 
     def modules_to_delete(self) -> list[str]:

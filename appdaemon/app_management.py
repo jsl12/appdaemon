@@ -916,7 +916,7 @@ class AppManagement:
             self.logger.info("Modified Python files: %s", len(mod))
             for file in mod:
                 self.logger.debug("  - %s", file.relative_to(self.AD.app_dir.parent))
-            mods = self.dependency_manager.modules_to_import()
+            mods = self.dependency_manager.python_deps.modules_to_import()
             self.logger.debug("Full module list: %s", mods)
 
         if deleted := self.python_filecheck.deleted:
