@@ -1,9 +1,16 @@
 from abc import ABC
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, override
 
-from .dependency import find_all_dependents, get_dependency_graph, reverse_graph
+from .dependency import (
+    find_all_dependents,
+    get_dependency_graph,
+    reverse_graph,
+    get_full_module_name,
+    topo_sort,
+    get_all_nodes,
+)
 from .models.app_config import AllAppConfig, AppConfig
 from .models.internal.file_check import FileCheck
 
@@ -43,9 +50,25 @@ class Dependencies(ABC):
 class PythonDeps(Dependencies):
     ext: str = ".py"
 
+    @override
+    def update(self, new_files: Iterable[Path]):
+        """This causes the python files to get read"""
+        return super().update(new_files)
+
     def refresh_dep_graph(self):
         self.dep_graph = get_dependency_graph(self.files)
         self.rev_graph = reverse_graph(self.dep_graph)
+
+    def modules_to_import(self) -> set[str]:
+        sub_graph = {
+            (mod := get_full_module_name(file)): self.dep_graph[mod] for file in (self.files.new | self.files.modified)
+        }
+        nodes = get_all_nodes(sub_graph)
+        return nodes
+
+    def modules_to_delete(self) -> list[str]:
+        sub_graph = {(mod := get_full_module_name(file)): self.dep_graph[mod] for file in self.files.deleted}
+        return topo_sort(sub_graph)
 
 
 @dataclass
@@ -69,18 +92,26 @@ class AppDeps(Dependencies):
             if isinstance(app_cfg, AppConfig) and app_cfg.module_name in modules
         )
 
-    def cascade_modules(self, modules: Iterable[str]) -> set[str]:
+    def all_app_deps(self, modules: Iterable[str]) -> set[str]:
         """Find all the apps that depend on the given modules, even indirectly"""
         return self.get_dependents(self.direct_app_deps(modules))
 
 
 @dataclass
 class DependencyManager:
+    """Keeps track of all the python files and the app config files (either yaml or toml)
+
+    Instantiating this class will walk the app_directory with ``pathlib.Path.rglob`` to find all the files. This happens both for app config files and app python files.
+
+    The main purpose of breaking this out from ``AppManagement`` is to make it independently testable.
+    """
+
     app_dir: Path
     python_deps: PythonDeps = field(init=False)
     app_deps: AppDeps = field(init=False)
 
     def __post_init__(self):
+        """Instantiation docstring"""
         self.python_deps = PythonDeps.from_path(self.app_dir)
         self.app_deps = AppDeps.from_path(self.app_dir)
 
@@ -91,4 +122,38 @@ class DependencyManager:
     def get_dependent_apps(self, modules: Iterable[str]) -> set[str]:
         """Finds all of the apps that depend on the given modules, even indirectly"""
         modules |= self.python_deps.get_dependents(modules)
-        return self.app_deps.cascade_modules(modules)
+        return self.app_deps.all_app_deps(modules)
+
+    def update_python_files(self, new_files: Iterable[Path]):
+        """Updates the dependency graph of python files.
+
+        This is used to map which modules import which other modules.
+        """
+        return self.python_deps.update(new_files)
+
+    def modules_to_import(self) -> set[str]:
+        return self.python_deps.modules_to_import()
+
+    def affected_apps(self, modules: Iterable[str]) -> set[str]:
+        """All the apps that are affected by the modules being (re)imported"""
+        return self.app_deps.all_app_deps(modules)
+
+    def affected_graph(self, modules: Iterable[str]) -> dict[str, set[str]]:
+        """The dependency subgraph for the affected apps"""
+        return {app: self.app_deps.dep_graph[app] for app in self.affected_apps(modules)}
+
+    def apps_to_load(self, modules: Iterable[str]) -> list[str]:
+        """Gets the list of apps to load, in order, based on the modules that needed to be (re)imported."""
+        return topo_sort(self.affected_graph(modules))
+
+    def apps_to_terminate(self) -> set[str]:
+        mods = self.python_deps.modules_to_delete()
+        apps = self.app_deps.all_app_deps(mods)
+        return apps
+
+    def dependent_modules(self, mod: str):
+        mods = find_all_dependents(mod, self.python_deps.rev_graph)
+        return mods | set((mod,))
+
+    def dependent_apps(self, mod: str) -> set[str]:
+        return self.app_deps.all_app_deps(self.dependent_modules(mod))

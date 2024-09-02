@@ -668,7 +668,10 @@ def write_toml_config(path, **kwargs):
 
 def read_config_file(file: Path) -> Dict[str, Dict]:
     # raise ValueError
-    """Reads a single YAML or TOML file."""
+    """Reads a single YAML or TOML file.
+
+    This includes all the mechanics for including secrets and environment variables.
+    """
     file = Path(file) if not isinstance(file, Path) else file
     if file.suffix == ".yaml":
         return read_yaml_config(file)

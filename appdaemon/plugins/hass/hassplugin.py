@@ -87,11 +87,11 @@ class HassPlugin(PluginBase):
     async def am_reading_messages(self):
         return self.reading_messages
 
-    def stop(self):
+    async def stop(self):
         self.logger.debug("stop() called for %s", self.name)
         self.stopping = True
         if self.ws is not None:
-            self.ws.close()
+            await self.ws.close()
 
     #
     # Placeholder for constraints

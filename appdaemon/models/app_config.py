@@ -122,6 +122,16 @@ class AllAppConfig(RootModel):
     def app_names(self) -> Set[str]:
         return set(app_name for app_name, cfg in self.root.items() if isinstance(cfg, AppConfig))
 
+    def apps_from_file(self, paths: Iterable[Path]):
+        if not isinstance(paths, set):
+            paths = set(paths)
+
+        return set(
+            app_name
+            for app_name, cfg in self.root.items()
+            if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.config_path in paths
+        )
+
     @property
     def active_app_count(self) -> int:
         """Active in this case means not disabled"""

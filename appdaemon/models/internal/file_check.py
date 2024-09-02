@@ -1,10 +1,24 @@
 from datetime import datetime
+from logging import Logger
 from pathlib import Path
 from typing import Any, Dict, Iterable, Set
 from pydantic import BaseModel, Field
 
 
 class FileCheck(BaseModel):
+    """Class that keeps track of file changes.
+
+    Usually instantiated with FileCheck.from_paths(...). After instantiation, all the paths are marked as new.
+
+    Call the ``FileCheck.update`` method with a new set of files to compute the changes. Afterwards, paths changed since the last update will be in the relevant new/modified/deleted attribute.
+
+    Attributes:
+        mtimes: Mapping of Path objects to the timestamps
+        new: Set of new Path objects
+        modified: Set of modified Path objects
+        deleted: Set of deleted Path objects
+    """
+
     mtimes: Dict[Path, float] = Field(default_factory=dict)
     new: Set[Path] = Field(default_factory=set)
     modified: Set[Path] = Field(default_factory=set)
@@ -12,6 +26,7 @@ class FileCheck(BaseModel):
 
     @classmethod
     def from_paths(cls, iter: Iterable[Path]):
+        """Use this method to instantiate from Paths"""
         return cls(mtimes={p: p.stat().st_mtime for p in iter})
 
     def model_post_init(self, __context: Any):
@@ -38,6 +53,7 @@ class FileCheck(BaseModel):
 
     @property
     def there_were_changes(self) -> bool:
+        """Property that is True if there are any new, modified, or deleted files since the last time the ``FileCheck.update`` method was called"""
         return bool(self.new) or bool(self.modified) or bool(self.deleted)
 
     def update(self, new_files: Iterable[Path]):
@@ -69,6 +85,16 @@ class FileCheck(BaseModel):
                 self.new.add(new_file)
 
             self.mtimes[new_file] = new_mtime
+
+    def log_changes(self, logger: Logger, app_dir: Path):
+        for file in sorted(self.new):
+            logger.debug("New app config file: %s", file.relative_to(app_dir.parent))
+
+        for file in sorted(self.modified):
+            logger.debug("Detected app config file modification: %s", file.relative_to(app_dir.parent))
+
+        for file in sorted(self.deleted):
+            logger.debug("Detected app config file deletion: %s", file.relative_to(app_dir.parent))
 
 
 class AppConfigFileCheck(FileCheck):

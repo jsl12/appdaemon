@@ -22,8 +22,6 @@ import appdaemon.utils as utils
 from appdaemon.dependency import (
     DependencyResolutionFail,
     find_all_dependents,
-    get_dependency_graph,
-    get_full_module_name,
     reverse_graph,
     topo_sort,
 )
@@ -53,24 +51,35 @@ class UpdateMode(Enum):
 
 @dataclass
 class LoadingActions:
+    """Stores what's going to happen to apps/modules during check_app_updates.
+
+    Attributes:
+        init: Which apps/modules are new
+        reload: Which apps/modules need to be reloaded or restarted
+        term: Which apps/modules need to be stopped and removed
+        failed: Which apps/modules failed be started and/or removed
+    """
+
     init: Set[str] = field(default_factory=set)
     reload: Set[str] = field(default_factory=set)
     term: Set[str] = field(default_factory=set)
     failed: Set[str] = field(default_factory=set)
 
     def init_sort(self, graph: Dict[str, Set[str]]):
+        """Uses a dependency graph to sort the internal init and reload sets together"""
         rev_graph = reverse_graph(graph)
         to_load = (self.init | self.reload) - self.failed
         to_load |= find_all_dependents(to_load, rev_graph)
-        sub_graph = {n: graph[n] for n in to_load}
+        sub_graph = {n: graph.get(n, set()) for n in to_load}
         init_order = [n for n in topo_sort(sub_graph) if n in to_load]
         return init_order
 
     def term_sort(self, graph: Dict[str, Set[str]]):
+        """Uses a dependency graph to sort the internal reload and term sets together"""
         rev_graph = reverse_graph(graph)
         to_term = (self.reload | self.term) - self.failed
         to_term |= find_all_dependents(to_term, rev_graph)
-        sub_graph = {n: graph[n] for n in to_term}
+        sub_graph = {n: graph.get(n, set()) for n in to_term}
         term_order = [n for n in topo_sort(sub_graph) if n in to_term]
         return term_order
 
@@ -205,10 +214,12 @@ class AppManagement:
 
     @property
     def config_filecheck(self) -> FileCheck:
+        """Property that aliases the ``FileCheck`` instance for the app config files"""
         return self.dependency_manager.app_deps.files
 
     @property
     def python_filecheck(self) -> FileCheck:
+        """Property that aliases the ``FileCheck`` instance for the app python files"""
         return self.dependency_manager.python_deps.files
 
     @property
@@ -393,6 +404,10 @@ class AppManagement:
             self.logger.warning("Cannot start app %s, as it is already running", app_name)
             return
 
+        # assert dependencies
+        for dep in self.app_config.root[app_name].dependencies:
+            assert self.objects[dep].running, f"Dependency on '{dep}' not met for app '{app_name}'"
+
         try:
             try:
                 await self.create_app_object(app_name)
@@ -517,6 +532,9 @@ class AppManagement:
             apps |= set(name for name, cfg in self.app_config.root.items() if isinstance(cfg, GlobalModule))
         return apps
 
+    def get_running_app_names(self) -> set[str]:
+        return set(app_name for app_name in self.get_managed_app_names() if self.objects[app_name].running)
+
     def init_plugin_object(self, name: str, object, use_dictionary_unpacking: bool = False) -> None:
         self.objects[name] = ManagedObject(
             **{
@@ -629,39 +647,39 @@ class AppManagement:
 
     async def check_app_config_files(self, update_actions: UpdateActions):
         """Updates self.mtimes_config and self.app_config"""
-        config_files = await self.get_app_config_files()
-        self.config_filecheck.update(config_files)
-
-        for file in sorted(self.config_filecheck.new):
-            self.logger.debug("New app config file: %s", file.relative_to(self.AD.app_dir.parent))
-
-        for file in sorted(self.config_filecheck.modified):
-            self.logger.debug("Detected app config file modification: %s", file.relative_to(self.AD.app_dir.parent))
-
-        for file in sorted(self.config_filecheck.deleted):
-            self.logger.debug("Detected app config file deletion: %s", file.relative_to(self.AD.app_dir.parent))
+        files = await self.get_app_config_files()
+        self.dependency_manager.app_deps.update(files)
 
         if self.config_filecheck.there_were_changes:
             self.logger.debug(" Config file changes ".center(75, "="))
-            new_full_config: AllAppConfig = await self.read_all(self.config_filecheck.paths)
-            current_app_names = self.get_managed_app_names(include_globals=True)
+            self.config_filecheck.log_changes(self.logger, self.AD.app_dir)
 
-            for name, cfg in new_full_config.root.items():
+            files_to_read = self.config_filecheck.new | self.config_filecheck.modified
+            freshly_read_cfg = await self.read_all(files_to_read)
+
+            current_app_names = self.get_running_app_names()
+
+            for name, cfg in freshly_read_cfg.app_definitions():
                 if name in self.non_apps:
                     continue
 
                 if name not in current_app_names:
-                    self.logger.info(f"New app config: {name}")
+                    self.logger.info("New app config: %s", name)
                     update_actions.apps.init.add(name)
                 else:
                     # If an app exists, compare to the current config
                     if cfg != self.app_config.root[name]:
-                        self.logger.info(f"App config modified: {name}")
+                        self.logger.info("App config modified: %s", name)
                         update_actions.apps.reload.add(name)
 
-            update_actions.apps.term = set(name for name in current_app_names if name not in self.app_config)
+            prev_apps_from_read_files = self.app_config.apps_from_file(files_to_read) & current_app_names
+            deleted_apps = set(n for n in prev_apps_from_read_files if n not in freshly_read_cfg.app_names())
+            update_actions.apps.term |= deleted_apps
+            for name in deleted_apps:
+                # del self.app_config.root[name]
+                self.logger.info("App config deleted: %s", name)
 
-            self.app_config = new_full_config
+            self.app_config.root.update(freshly_read_cfg.root)
 
         if self.AD.threading.auto_pin:
             active_apps = self.app_config.active_app_count
@@ -673,7 +691,10 @@ class AppManagement:
 
     @utils.executor_decorator
     def read_config_file(self, file: Path) -> AllAppConfig:
-        """Reads a single YAML or TOML file into a pydantic model. This also sets the config_path attribute of any AppConfigs."""
+        """Reads a single YAML or TOML file into a pydantic model. This also sets the config_path attribute of any AppConfigs.
+
+        This function is primarily used by the create/edit/remove app methods that write yaml files.
+        """
         raw_cfg = utils.read_config_file(file)
         if not bool(raw_cfg):
             self.logger.warning(f"Loaded an empty config file: {file.relative_to(self.AD.app_dir.parent)}")
@@ -689,10 +710,11 @@ class AppManagement:
         """Reads an app into memory by importing or reloading the module it needs"""
         if mod := sys.modules.get(module_name):
             try:
-                # this check is skip modules that don't come from the app directory
+                # this check is to skip modules that don't come from the app directory
                 Path(mod.__file__).relative_to(self.AD.app_dir)
             except ValueError:
-                self.logger.debug("Skipping '%s'", module_name)
+                # self.logger.debug("Skipping '%s'", module_name)
+                pass
             else:
                 self.logger.debug("Reloading '%s'", module_name)
                 importlib.reload(mod)
@@ -794,15 +816,15 @@ class AppManagement:
             if mode == UpdateMode.TERMINATE:
                 update_actions.modules = LoadingActions()
                 update_actions.apps = LoadingActions(term=self.get_managed_app_names())
-            else:
-                self._add_reload_apps(update_actions)
-                self._check_for_deleted_modules(update_actions)
+            # else:
+            # self._add_reload_apps(update_actions)
+            # self._check_for_deleted_modules(update_actions)
 
             await self._restart_plugin(plugin, update_actions)
 
-            await self._stop_apps(update_actions)
-
             await self._import_modules(update_actions)
+
+            await self._stop_apps(update_actions)
 
             await self._start_apps(update_actions)
 
@@ -846,7 +868,9 @@ class AppManagement:
     def _init_dep_manager(self):
         self.dependency_manager = DependencyManager(self.AD.app_dir)
         self.config_filecheck.mtimes = {}
+        self.python_filecheck.mtimes = {}
 
+    @utils.executor_decorator
     def get_python_files(self) -> Iterable[Path]:
         """Iterates through *.py in the app directory. Excludes directory names defined in exclude_dirs and with a "." character. Also excludes files that aren't readable."""
         return set(
@@ -868,70 +892,67 @@ class AppManagement:
             and os.access(f, os.R_OK)  # skip unreadable files
         )
 
-    @utils.executor_decorator
-    def check_app_python_files(self, update_actions: UpdateActions):
+    async def check_app_python_files(self, update_actions: UpdateActions):
         """Checks
 
         Part of self.check_app_updates sequence
         """
-        self.python_filecheck.update(self.get_python_files())
+        files = await self.get_python_files()
+        self.dependency_manager.update_python_files(files)
+        # self.python_filecheck.update(self.get_python_files())
+
+        self.dependency_manager.python_deps.files.there_were_changes
 
         if self.python_filecheck.there_were_changes:
             self.logger.debug(" Python file changes ".center(75, "="))
+            update_actions.modules.init |= self.dependency_manager.modules_to_import()
+            update_actions.apps.init |= self.dependency_manager.affected_apps(update_actions.modules.init)
+            update_actions.modules.term |= self.dependency_manager.apps_to_terminate()
 
         if new := self.python_filecheck.new:
             self.logger.info("New Python files: %s", len(new))
-            dep_graph = get_dependency_graph(new)
-            # self.module_dependencies.update(dep_graph)
-            update_actions.modules.init = set(dep_graph.keys())
 
         if mod := self.python_filecheck.modified:
             self.logger.info("Modified Python files: %s", len(mod))
-            dep_graph = get_dependency_graph(mod)
-            # self.module_dependencies.update(dep_graph)
-            update_actions.modules.reload = set(dep_graph.keys())
+            for file in mod:
+                self.logger.debug("  - %s", file.relative_to(self.AD.app_dir.parent))
+            mods = self.dependency_manager.modules_to_import()
+            self.logger.debug("Full module list: %s", mods)
 
         if deleted := self.python_filecheck.deleted:
             self.logger.info("Deleted Python files: %s", len(deleted))
-            deleted_modules = set(map(get_full_module_name, deleted))
-            update_actions.modules.term = deleted_modules
-            for del_mod in deleted_modules:
-                del self.module_dependencies[del_mod]
 
-        # Reverse the graph so that it maps each module to the other modules that import it
-        self.reversed_graph = reverse_graph(self.module_dependencies)
+    # def _check_for_deleted_modules(self, update_actions: UpdateActions):
+    #     """Check for deleted modules and add them to the terminate list in the apps dict. Part of self.check_app_updates sequence"""
 
-    def _check_for_deleted_modules(self, update_actions: UpdateActions):
-        """Check for deleted modules and add them to the terminate list in the apps dict. Part of self.check_app_updates sequence"""
+    #     deleted_module_names = set(map(get_full_module_name, self.python_filecheck.deleted))
+    #     deleted_module_names |= find_all_dependents(deleted_module_names, self.reversed_graph)
 
-        deleted_module_names = set(map(get_full_module_name, self.python_filecheck.deleted))
-        deleted_module_names |= find_all_dependents(deleted_module_names, self.reversed_graph)
+    #     to_delete = set(
+    #         app_name
+    #         for app_name, cfg in self.app_config.root.items()
+    #         if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in deleted_module_names
+    #     )
+    #     if to_delete:
+    #         self.logger.debug(f"Removing apps because of deleted Python files: {to_delete}")
+    #         update_actions.apps.term |= to_delete
 
-        to_delete = set(
-            app_name
-            for app_name, cfg in self.app_config.root.items()
-            if isinstance(cfg, (AppConfig, GlobalModule)) and cfg.module_name in deleted_module_names
-        )
-        if to_delete:
-            self.logger.debug(f"Removing apps because of deleted Python files: {to_delete}")
-            update_actions.apps.term |= to_delete
+    # def _add_reload_apps(self, update_actions: UpdateActions):
+    #     """Determines which apps are going to be affected by the modules that will be (re)loaded.
 
-    def _add_reload_apps(self, update_actions: UpdateActions):
-        """Determines which apps are going to be affected by the modules that will be (re)loaded.
+    #     Part of self.check_app_updates sequence
+    #     """
+    #     module_load_order = update_actions.modules.init_sort(self.module_dependencies)
 
-        Part of self.check_app_updates sequence
-        """
-        module_load_order = update_actions.modules.init_sort(self.module_dependencies)
+    #     for app_name, cfg in self.app_config.root.items():
+    #         if isinstance(cfg, (AppConfig, GlobalModule)):
+    #             if cfg.module_name in update_actions.modules.init:
+    #                 update_actions.apps.init.add(app_name)
+    #             elif cfg.module_name in module_load_order:
+    #                 update_actions.apps.reload.add(app_name)
 
-        for app_name, cfg in self.app_config.root.items():
-            if isinstance(cfg, (AppConfig, GlobalModule)):
-                if cfg.module_name in update_actions.modules.init:
-                    update_actions.apps.init.add(app_name)
-                elif cfg.module_name in module_load_order:
-                    update_actions.apps.reload.add(app_name)
-
-        if load_apps := (update_actions.apps.init | update_actions.apps.reload):
-            self.logger.debug("Apps to be loaded: %s", load_apps)
+    #     if load_apps := (update_actions.apps.init | update_actions.apps.reload):
+    #         self.logger.debug("Apps to be loaded: %s", load_apps)
 
     async def _restart_plugin(self, plugin, update_actions: UpdateActions):
         if plugin is not None:
@@ -998,8 +1019,12 @@ class AppManagement:
                     await safe_start(self)
 
     async def _import_modules(self, update_actions: UpdateActions) -> Set[str]:
-        """Calls ``self.import_module`` for each module in the list"""
-        load_order = update_actions.modules.init_sort(self.module_dependencies)
+        """Calls ``self.import_module`` for each module in the list
+
+        This is what handles importing all the modules safely. If any of them fail to import, that failure is cascaded through the dependencies.
+        """
+        load_order = update_actions.modules.init_sort(self.dependency_manager.python_deps.dep_graph)
+
         if load_order:
             self.logger.debug("Determined module load order: %s", load_order)
             for module_name in load_order:
@@ -1010,18 +1035,15 @@ class AppManagement:
                         await self.import_module(module_name)
                     except Exception:
                         update_actions.modules.failed.add(module_name)
-                        for app_name in self.apps_per_module(module_name):
+                        failed_apps = self.dependency_manager.dependent_apps(module_name)
+                        update_actions.apps.init -= failed_apps
+                        update_actions.apps.term |= failed_apps
+                        for app_name in failed_apps:
                             await self.set_state(app_name, state="compile_error")
                             await self.increase_inactive_apps(app_name)
                         raise
 
                 await safe_import(self)
-
-        if failed := update_actions.modules.failed:
-            failed |= find_all_dependents(failed, self.reversed_graph)
-            affected_apps = set(app_name for module in failed for app_name in self.apps_per_module(module))
-            update_actions.apps.init -= affected_apps
-            update_actions.apps.reload -= affected_apps
 
     def apps_per_module(self, module_name: str) -> Set[str]:
         """Finds which apps came from a given module name.

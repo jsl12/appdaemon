@@ -199,7 +199,13 @@ class Plugins:
         self.logger.debug("stop() called for plugin_management")
         self.stopping = True
         for plugin in self.plugin_objs:
-            self.plugin_objs[plugin]["object"].stop()
+            stop_func = self.plugin_objs[plugin]["object"].stop
+
+            if asyncio.iscoroutinefunction(stop_func):
+                self.AD.loop.create_task(stop_func())
+            else:
+                stop_func()
+
             name = self.plugin_objs[plugin]["name"]
             self.AD.loop.create_task(self.AD.callbacks.clear_callbacks(name))
             self.AD.futures.cancel_futures(name)
