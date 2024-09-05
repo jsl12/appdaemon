@@ -1,7 +1,7 @@
 from abc import ABC
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, override
+from typing import Iterable
 
 from .dependency import (
     find_all_dependents,
@@ -39,8 +39,10 @@ class Dependencies(ABC):
     def from_paths(cls, paths: Iterable[Path]):
         return cls(files=FileCheck.from_paths(paths))
 
-    def get_dependents(self, items: Iterable[str]) -> set[str]:
-        items = items if isinstance(items, set) else set(items)
+    def get_dependents(self, items: str | Iterable[str]) -> set[str]:
+        """Uses ``find_all_dependents`` with the reversed graph to recursively find all the indirectly dependent nodes"""
+        items = {items} if isinstance(items, str) else set(items)
+        # items = items if isinstance(items, set) else set(items)
         items |= find_all_dependents(items, self.rev_graph)
         return items
 
@@ -49,7 +51,6 @@ class Dependencies(ABC):
 class PythonDeps(Dependencies):
     ext: str = ".py"
 
-    @override
     def update(self, new_files: Iterable[Path]):
         """This causes the python files to get read"""
         return super().update(new_files)
@@ -59,6 +60,7 @@ class PythonDeps(Dependencies):
         self.rev_graph = reverse_graph(self.dep_graph)
 
     def modules_to_import(self) -> set[str]:
+        """Takes the union of the ``new`` and ``modified`` file sets. and converts them to importable modules names"""
         files = self.files.new | self.files.modified
         nodes = set(get_full_module_name(file) for file in files)
         return nodes
@@ -90,7 +92,10 @@ class AppDeps(Dependencies):
         )
 
     def all_app_deps(self, modules: Iterable[str]) -> set[str]:
-        """Find all the apps that depend on the given modules, even indirectly"""
+        """Find all the apps that depend on the given modules, even indirectly
+
+        Uses ``find_all_dependents``
+        """
         return self.get_dependents(self.direct_app_deps(modules))
 
 
@@ -124,7 +129,7 @@ class DependencyManager:
     def update_python_files(self, new_files: Iterable[Path]):
         """Updates the dependency graph of python files.
 
-        This is used to map which modules import which other modules.
+        This is used to map which modules import which other modules and requires reading the contents of each python file to find the import statements.
         """
         return self.python_deps.update(new_files)
 
@@ -139,18 +144,15 @@ class DependencyManager:
         """The dependency subgraph for the affected apps"""
         return {app: self.app_deps.dep_graph[app] for app in self.affected_apps(modules)}
 
-    def apps_to_load(self, modules: Iterable[str]) -> list[str]:
-        """Gets the list of apps to load, in order, based on the modules that needed to be (re)imported."""
-        return topo_sort(self.affected_graph(modules))
+    def dependent_modules(self, modules: str | Iterable[str]):
+        """Uses ``find_all_dependents`` with the reversed dependency graph to recursively find all the indirectly dependent modules"""
+        return self.python_deps.get_dependents(modules)
+
+    def dependent_apps(self, modules: str | Iterable[str]) -> set[str]:
+        """Finds any apps that depend on any modules that depend on any of the given modules."""
+        return self.app_deps.all_app_deps(self.dependent_modules(modules))
 
     def apps_to_terminate(self) -> set[str]:
         mods = self.python_deps.modules_to_delete()
         apps = self.app_deps.all_app_deps(mods)
         return apps
-
-    def dependent_modules(self, mod: str):
-        mods = find_all_dependents(mod, self.python_deps.rev_graph)
-        return mods | set((mod,))
-
-    def dependent_apps(self, mod: str) -> set[str]:
-        return self.app_deps.all_app_deps(self.dependent_modules(mod))
