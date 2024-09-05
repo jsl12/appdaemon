@@ -69,7 +69,14 @@ class LoadingActions:
     def init_set(self) -> set[str]:
         return (self.init | self.reload) - self.failed
 
-    def init_sort(self, dm: DependencyManager) -> list[str]:
+    def import_sort(self, dm: DependencyManager) -> list[str]:
+        """Uses a dependency graph to sort the internal ``init`` and ``reload`` sets together"""
+        items = copy(self.init_set)
+        items |= find_all_dependents(items, dm.python_deps.rev_graph)
+        order = [n for n in topo_sort(dm.python_deps.dep_graph) if n in items]
+        return order
+
+    def start_sort(self, dm: DependencyManager) -> list[str]:
         """Uses a dependency graph to sort the internal ``init`` and ``reload`` sets together"""
         items = copy(self.init_set)
         items |= find_all_dependents(items, dm.app_deps.rev_graph)
@@ -980,7 +987,7 @@ class AppManagement:
 
         Part of self.check_app_updates sequence
         """
-        stop_order = update_actions.apps.term_sort(self.app_config.reversed_dependency_graph())
+        stop_order = update_actions.apps.term_sort(self.dependency_manager)
         # stop_order = update_actions.apps.term_sort(self.app_config.depedency_graph())
         if stop_order:
             self.logger.debug("Stopping apps: %s", update_actions.apps.term_set)
@@ -997,7 +1004,7 @@ class AppManagement:
             update_actions.apps.reload -= failed_to_stop
 
     async def _start_apps(self, update_actions: UpdateActions):
-        start_order = update_actions.apps.init_sort(self.app_config.depedency_graph())
+        start_order = update_actions.apps.start_sort(self.dependency_manager)
         if start_order:
             self.logger.debug("Starting apps: %s", update_actions.apps.init_set)
             self.logger.debug("App start order: %s", start_order)
@@ -1023,7 +1030,7 @@ class AppManagement:
 
         This is what handles importing all the modules safely. If any of them fail to import, that failure is cascaded through the dependencies.
         """
-        load_order = update_actions.modules.init_sort(self.dependency_manager.python_deps.dep_graph)
+        load_order = update_actions.modules.import_sort(self.dependency_manager)
 
         if load_order:
             self.logger.debug("Determined module load order: %s", load_order)
