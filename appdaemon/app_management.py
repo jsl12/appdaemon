@@ -72,7 +72,7 @@ class LoadingActions:
 
     def init_sort(self, graph: dict[str, set[str]]) -> list[str]:
         """Uses a dependency graph to sort the internal init and reload sets together"""
-        return self.sort_order(self.init_set)
+        return self.sort_order(graph, self.init_set)
 
     @property
     def term_set(self) -> set[str]:
@@ -80,7 +80,7 @@ class LoadingActions:
 
     def term_sort(self, graph: dict[str, Set[str]]):
         """Uses a dependency graph to sort the internal ``reload`` and ``term`` sets together"""
-        return self.sort_order(self.term_set)
+        return self.sort_order(graph, self.term_set)
 
     def sort_order(self, graph: dict[str, Set[str]], items: set[str]) -> list[str]:
         rev_graph = reverse_graph(graph)
