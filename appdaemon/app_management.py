@@ -1,5 +1,5 @@
 import asyncio
-import copy
+from copy import copy
 import cProfile
 import importlib
 import io
@@ -23,7 +23,6 @@ from appdaemon.dependency import (
     DependencyResolutionFail,
     find_all_dependents,
     get_full_module_name,
-    reverse_graph,
     topo_sort,
 )
 from appdaemon.dependency_manager import DependencyManager
@@ -70,22 +69,22 @@ class LoadingActions:
     def init_set(self) -> set[str]:
         return (self.init | self.reload) - self.failed
 
-    def init_sort(self, graph: dict[str, set[str]]) -> list[str]:
-        """Uses a dependency graph to sort the internal init and reload sets together"""
-        return self.sort_order(graph, self.init_set)
+    def init_sort(self, dm: DependencyManager) -> list[str]:
+        """Uses a dependency graph to sort the internal ``init`` and ``reload`` sets together"""
+        items = copy(self.init_set)
+        items |= find_all_dependents(items, dm.app_deps.rev_graph)
+        order = [n for n in topo_sort(dm.app_deps.dep_graph) if n in items]
+        return order
 
     @property
     def term_set(self) -> set[str]:
         return self.reload | self.term
 
-    def term_sort(self, graph: dict[str, Set[str]]):
+    def term_sort(self, dm: DependencyManager):
         """Uses a dependency graph to sort the internal ``reload`` and ``term`` sets together"""
-        return self.sort_order(graph, self.term_set)
-
-    def sort_order(self, graph: dict[str, Set[str]], items: set[str]) -> list[str]:
-        rev_graph = reverse_graph(graph)
-        items |= find_all_dependents(items, rev_graph)
-        order = [n for n in topo_sort(graph) if n in items]
+        items = copy(self.term_set)
+        items |= find_all_dependents(items, dm.app_deps.rev_graph)
+        order = [n for n in topo_sort(dm.app_deps.rev_graph) if n in items]
         return order
 
 
@@ -981,8 +980,10 @@ class AppManagement:
 
         Part of self.check_app_updates sequence
         """
-        stop_order = update_actions.apps.term_sort(self.app_config.depedency_graph())
+        stop_order = update_actions.apps.term_sort(self.app_config.reversed_dependency_graph())
+        # stop_order = update_actions.apps.term_sort(self.app_config.depedency_graph())
         if stop_order:
+            self.logger.debug("Stopping apps: %s", update_actions.apps.term_set)
             self.logger.debug("App stop order: %s", stop_order)
 
         failed_to_stop = set()  # stores apps that had a problem terminating
@@ -998,6 +999,7 @@ class AppManagement:
     async def _start_apps(self, update_actions: UpdateActions):
         start_order = update_actions.apps.init_sort(self.app_config.depedency_graph())
         if start_order:
+            self.logger.debug("Starting apps: %s", update_actions.apps.init_set)
             self.logger.debug("App start order: %s", start_order)
             for app_name in start_order:
                 if isinstance((cfg := self.app_config.root[app_name]), AppConfig):
