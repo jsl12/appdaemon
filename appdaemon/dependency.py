@@ -1,10 +1,114 @@
 import ast
 import logging
-from collections.abc import Generator
+import sys
+from collections.abc import Generator, Iterable, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from graphlib import TopologicalSorter
+from importlib.machinery import ModuleSpec
+from importlib.util import find_spec
 from pathlib import Path
-from typing import Iterable
+from typing import TypeVar
+
+from watchdog.events import DirModifiedEvent, FileModifiedEvent, FileSystemEventHandler
+
+from appdaemon import utils
+
+ImportType = ast.Import | ast.ImportFrom
 
 logger = logging.getLogger("AppDaemon._app_management")
+
+#
+# Imports
+#
+
+
+def gen_addition_import_paths(base: Path, exclude: set[str] | None = None) -> Generator[Path]:
+    """Generate the additional import paths based on the structure of the app directory."""
+    exclude = exclude if exclude is not None else set()
+    exclude |= {"__pycache__"}
+
+    yield base  # Always include the base directory itself
+
+    # Get unique set of the absolute paths of all the subdirectories containing python files
+    python_file_parents = set(
+        f.parent.resolve()
+        for f in utils.recursive_get_files(base, ".py", exclude)
+    )  # fmt: skip
+
+    # Filter out any that have __init__.py files in them
+    module_parents = set(
+        p for p in python_file_parents
+        if not (p / "__init__.py").exists()
+    )  # fmt: skip
+
+    #  unique set of the absolute paths of all subdirectories with a __init__.py in them
+    package_dirs = set(
+        p for p in python_file_parents
+        if (p / "__init__.py").exists()
+    )  # fmt: skip
+
+    # Filter by ones whose parent directory's don't also contain an __init__.py
+    top_packages_dirs = set(
+        p for p in package_dirs
+        if not (p.parent / "__init__.py").exists()
+    )  # fmt: skip
+
+    # Get the parent directories so the ones with __init__.py are importable
+    package_parents = set(p.parent for p in top_packages_dirs)
+
+    # Combine import directories. Having the list sorted will prioritize parent folders over children during import
+    yield from (module_parents | package_parents)
+
+
+def get_additional_import_paths(base: Path, exclude: set[str] | None = None) -> list[Path]:
+    """Get a sorted list of additional import paths from the given base directory. This is intended to be used with the
+    user's apps directory."""
+    return sorted(set(gen_addition_import_paths(base, exclude)), reverse=True)
+
+
+@contextmanager
+def app_import_context(app_dir: Path, exclude: set[str] | None = None, *, restore: bool = True) -> Generator[None]:
+    """Context manager that temporarily adds additional import paths for the duration of the context. Optionally
+    restores the original sys.path on exit."""
+    og_paths = sys.path.copy()
+    try:
+        for additional_path in get_additional_import_paths(app_dir, exclude):
+            sys.path.insert(0, str(additional_path))
+        yield
+    finally:
+        if restore:
+            sys.path = og_paths
+
+
+def convert_import_name(imp: ImportType) -> str:
+    match imp:
+        case ast.Import(names=[ast.alias(name=str(mod_name))]):
+            # Covers
+            pass
+        case ast.ImportFrom(module=str(mod_name), level=0):
+            pass
+        case ast.ImportFrom(module=str(mod_name), level=int(level)):
+            # Covers situations like "from .<mod_name> import <symbol>"
+            mod_name = ("." * level) + mod_name
+        case ast.ImportFrom(module=None, level=int(level), names=[ast.alias(name=str(mod_name))]):
+            # Covers situations like "from . import <mod_name>"
+            mod_name = ("." * level) + mod_name
+        case _:
+            raise ValueError(f"Unknown import type: {imp}")
+    return mod_name
+
+
+def process_imports(imports: Iterable[ImportType], pkg: str | None = None) -> Generator[tuple[str, Path]]:
+    """Resolve each import node into its full module name and path."""
+    for imp in imports:
+        mod_name = convert_import_name(imp)
+        yield get_module_path(mod_name, pkg)
+
+
+#
+# Modules
+#
 
 
 def get_full_module_name(file_path: Path) -> str:
@@ -66,11 +170,8 @@ class DependencyResolutionFail(Exception):
         self.base_exception = base_exception
 
 
-def get_imports(parsed_module: ast.Module) -> Generator[ast.Import | ast.ImportFrom, None, None]:
-    yield from (
-        n for n in parsed_module.body
-        if isinstance(n, (ast.Import, ast.ImportFrom))
-    )
+def get_imports(parsed_module: ast.Module) -> Generator[ast.Import | ast.ImportFrom]:
+    yield from (n for n in parsed_module.body if isinstance(n, (ast.Import, ast.ImportFrom)))
 
 
 def get_file_deps(file_path: str | Path) -> set[str]:
@@ -108,10 +209,7 @@ def get_file_deps(file_path: str | Path) -> set[str]:
     return set(gen_modules())
 
 
-def get_dependency_graph(
-    files: Iterable[Path],
-    exclude: set[Path] | None = None
-) -> tuple[dict[str, set[str]], set[Path]]:
+def get_dependency_graph(files: Iterable[Path], exclude: set[Path] | None = None) -> tuple[dict[str, set[str]], set[Path]]:
     """Gets the dependency graph for some Python files.
 
     Returns:
@@ -136,27 +234,122 @@ def get_dependency_graph(
     return graph, failed
 
 
-def get_all_nodes(deps: dict[str, set[str]]) -> set[str]:
-    """Retrieve all unique nodes present in the graph, whether they appear as keys (nodes)
-    or values (edges).
-
-    Args:
-        deps (dict[str, set[str]]): A dictionary representing the graph where keys are node names and values are sets of dependent node names.
-
-    Returns:
-        A set containing all unique nodes in the graph.
-    """
-
-    def _gen():
-        for node, node_deps in deps.items():
-            yield node
-            if node_deps:
-                yield from node_deps
-
-    return set(_gen())
+def get_module_path(name: str, package: str | None = None) -> tuple[str, Path]:
+    """Resolve the importable module name to its full name and file path."""
+    match find_spec(name, package):
+        case ModuleSpec(name=str(fullname), origin=str(origin)):
+            return fullname, Path(origin).resolve()
+    raise ValueError(f"Module not found: {name}")
 
 
-def reverse_graph(graph: dict[str, set[str]]) -> dict[str, set[str]]:
+def get_imports_from_path(file_path: Path) -> Generator[ast.Import | ast.ImportFrom]:
+    parsed_module: ast.Module = ast.parse(file_path.read_text(), filename=file_path)
+    for node in parsed_module.body:
+        match node:
+            case ast.Import() | ast.ImportFrom():
+                yield node
+
+
+@dataclass
+class DepMaps:
+    app_dir: Path
+    app_to_mod: dict[str, str] = field(default_factory=dict)
+    app_to_app: dict[str, set[str]] = field(default_factory=dict)
+    mod_to_file: dict[str, Path] = field(default_factory=dict)
+    file_to_mod: dict[Path, str] = field(default_factory=dict)
+    mod_to_mod: dict[str, set[str]] = field(default_factory=dict)
+
+    #
+    # Setup
+    #
+
+    def add_module(self, mod_name: str):
+        match find_spec(mod_name):
+            case ModuleSpec(name=str(fullname), origin=str(origin)) as spec:
+                mod_path = Path(origin).resolve()
+                imports = get_imports_from_path(mod_path)
+            case _:
+                logger.warning(f"Module '{mod_name}' not found, skipping")
+                return
+
+        self.mod_to_file[fullname] = mod_path
+        self.file_to_mod[mod_path] = fullname
+
+        dep_paths = {n: p for n, p in process_imports(imports, spec.parent) if p.is_relative_to(self.app_dir)}
+        self.mod_to_file.update(dep_paths)
+        self.mod_to_mod[fullname] = set(dep_paths.keys())
+
+        # Add the missing ones because there are often imports from files that aren't directly associated with an app
+        missing = get_all_nodes(self.mod_to_mod) - set(self.mod_to_mod.keys())
+        for m in missing:
+            self.add_module(m)
+
+    def add_app(self, app_name: str, mod_name: str):
+        self.app_to_mod[app_name] = mod_name
+        self.add_module(mod_name)
+
+    def add_raw_cfg(self, raw_cfg: dict[str, dict]):
+        for app_name, app_cfg in raw_cfg.items():
+            if app_name == "sequence":
+                continue
+            match app_cfg:
+                case {"module": str(mod_name), "class": str()}:
+                    self.add_app(app_name, mod_name)
+                case {"global": True}:
+                    pass
+                case _:
+                    logger.warning(f"Invalid app configuration for '{app_name}': {app_cfg}")
+                    continue
+            match app_cfg:
+                case {"dependencies": list() as dep_list}:
+                    self.app_to_app[app_name] = set(dep_list)
+
+    def add_file(self, file: Path):
+        self.add_raw_cfg(utils.read_config_file(file, app_config=True))
+
+    #
+    # File Event Handlers
+    #
+
+    def handle_file_change(self, file: Path) -> tuple[set[str], set[str]]:
+        affected_modules = {self.file_to_mod[file]}
+        affected_modules |= find_all_dependents(affected_modules, reverse_graph(self.mod_to_mod))
+
+        rev = {d: a for a, d in self.app_to_mod.items()}
+        affected_apps = {rev[m] for m in affected_modules if m in rev}
+        return affected_modules, affected_apps
+
+    def handle_app_change(self, app_name: str) -> set[str]:
+        deps = find_all_dependents([app_name], reverse_graph(self.app_to_app))
+        return deps | {app_name}
+
+
+class DepFileSystemEventHandler(FileSystemEventHandler):
+    dm: DepMaps
+
+    def __init__(self, dm: DepMaps) -> None:
+        super().__init__()
+        self.dm = dm
+
+    def on_modified(self, event: DirModifiedEvent | FileModifiedEvent) -> None:
+        match event:
+            case FileModifiedEvent(src_path=str(f)):
+                self.dm.handle_file_change(Path(f))
+
+
+#
+# Graph Operations
+#
+
+T = TypeVar("T")
+
+
+def get_all_nodes(d: Mapping[T, Iterable[T]]) -> set[T]:
+    """Retrieve all unique nodes present in the graph, whether they appear as keys (nodes) or values (edges)."""
+    return set(d.keys()).union(*d.values())
+
+
+def reverse_graph(graph: Mapping[T, Iterable[T]]) -> Mapping[T, set[T]]:
     """Reverse the direction of edges in the given graph.
 
     Args:
@@ -165,7 +358,7 @@ def reverse_graph(graph: dict[str, set[str]]) -> dict[str, set[str]]:
     Returns:
         Graph: A new graph with the direction of all edges reversed.
     """
-    reversed_graph: dict[str, set[str]] = {n: set() for n in get_all_nodes(graph)}
+    reversed_graph = {n: set() for n in get_all_nodes(graph)}
 
     for module, dependencies in graph.items():
         if dependencies:
@@ -176,10 +369,10 @@ def reverse_graph(graph: dict[str, set[str]]) -> dict[str, set[str]]:
 
 
 def find_all_dependents(
-    base_nodes: Iterable[str],
-    reversed_deps: dict[str, set[str]],
-    visited: set[str] | None = None
-) -> set[str]:  # fmt: skip
+    base_nodes: Iterable[T],
+    reversed_deps: Mapping[T, set[T]],
+    visited: set[T] | None = None
+) -> set[T]:  # fmt: skip
     """Recursively find all nodes that depend on the specified base nodes.
 
     Args:
@@ -191,8 +384,8 @@ def find_all_dependents(
     Returns:
         A set of all nodes that depend on the base nodes either directly or indirectly.
     """
-    base_nodes = [base_nodes] if isinstance(base_nodes, str) else base_nodes
-    visited = visited or set()
+    base_nodes = {base_nodes} if isinstance(base_nodes, str) else base_nodes  # pyright: ignore[reportAssignmentType]
+    visited = visited if visited is not None else set()
 
     for base_node in base_nodes:
         if base_node not in reversed_deps:
@@ -201,63 +394,19 @@ def find_all_dependents(
         for dependent in reversed_deps[base_node]:
             if dependent not in visited:
                 visited.add(dependent)
-                find_all_dependents([dependent], reversed_deps, visited)
+                find_all_dependents({dependent}, reversed_deps, visited)
 
     return visited
 
 
-class CircularDependency(Exception):
-    pass
-
-
-def topo_sort(graph: dict[str, set[str]]) -> list[str]:
+def topo_sort(graph: Mapping[T, Iterable[T]]) -> list[T]:
     """Topological sort
 
     Args:
         graph (Mapping[str, set[str]]): Dependency graph
 
-    Raises:
-        CircularDependency: Raised if a cycle is detected
-
     Returns:
-        list[str]: Ordered list of the nodes
+        list: Ordered list of the nodes
     """
-    visited = list()
-    stack = list()
-    rec_stack = set()  # Set to track nodes in the current recursion stack
-    cycle_detected = False  # Flag to indicate cycle detection
-
-    def _node_gen():
-        for node, edges in graph.items():
-            yield node
-            if edges:
-                yield from edges
-
-    nodes = set(_node_gen())
-
-    def visit(node: str):
-        nonlocal cycle_detected
-        if node in rec_stack:
-            cycle_detected = True
-            return
-        elif node in visited:
-            return
-
-        visited.append(node)
-        rec_stack.add(node)
-
-        adjacent_nodes = graph.get(node) or set()
-        for adj_node in adjacent_nodes:
-            visit(adj_node)
-
-        rec_stack.remove(node)
-        stack.append(node)
-
-    for node in nodes:
-        if node not in visited:
-            visit(node)
-            if cycle_detected:
-                deps = graph[node]
-                raise CircularDependency(f"Visited {visited} already, but {node} depends on {deps}")
-
-    return stack
+    ts = TopologicalSorter(graph)
+    return list(ts.static_order())
