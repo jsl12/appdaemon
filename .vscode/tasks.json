@@ -71,7 +71,9 @@
             "problemMatcher": [],
             "command": "uv",
             "args": [
-                "run", "--extra", "doc",
+                "run",
+                "--locked",
+                "--group", "doc",
                 "sphinx-build", "-T", "-E",
                 "${workspaceFolder}/docs",
                 "${workspaceFolder}/.docs_build"
@@ -94,7 +96,8 @@
             "command": "uv",
             "args": [
                 "run",
-                "--extra", "doc",
+                "--locked",
+                "--group", "doc",
                 "sphinx-autobuild",
                 "--show-traceback", "--fresh-env",
                 "--host", "0.0.0.0",
@@ -116,11 +119,11 @@
         },
         {
             "label": "Install Dependencies",
-            "detail": "Installs all the dependencies, including dev and doc extras",
+            "detail": "Installs all the dependencies, including dev and doc groups",
             "type": "shell",
             "problemMatcher": [],
             "command": "uv",
-            "args": ["sync", "--all-extras"],
+            "args": ["sync", "--locked", "--all-groups"],
             "presentation":
                 {
                     "echo": true,
@@ -166,7 +169,27 @@
                 },
         },
         {
-            "label": "Pre-commit Hooks",
+            "label": "Install Pre-commit Hooks",
+            "detail": "Runs the pre-commit hooks.",
+            "type": "process",
+            "problemMatcher": [],
+            "command": "uv",
+            "args": [
+                "run",
+                "pre-commit", "install", "-f",
+            ],
+            "presentation":
+                {
+                    "echo": true,
+                    "reveal": "always",
+                    "focus": true,
+                    "panel": "shared",
+                    "showReuseMessage": true,
+                    "clear": true
+                },
+        },
+        {
+            "label": "Run Pre-commit Hooks",
             "detail": "Runs the pre-commit hooks.",
             "type": "process",
             "problemMatcher": [],

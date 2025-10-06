@@ -46,9 +46,7 @@ documentation = "https://appdaemon.readthedocs.io"
 repository = "https://github.com/AppDaemon"
 changelog = "https://github.com/AppDaemon/appdaemon/blob/master/docs/HISTORY.rst"
 
-
-# Declare development dependencies as optional
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "build>=1.2.1",
     "gitpython>=3.1.43",

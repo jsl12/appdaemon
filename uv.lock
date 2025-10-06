@@ -167,7 +167,7 @@ dependencies = [
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "build" },
     { name = "gitpython" },
@@ -191,58 +191,27 @@ doc = [
     { name = "sphinx-tabs" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "build" },
-    { name = "gitpython" },
-    { name = "ipykernel" },
-    { name = "notebook" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "rich" },
-    { name = "ruff" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "aiohttp-jinja2", specifier = ">=1.5.1" },
     { name = "astral", specifier = ">=3.2" },
     { name = "bcrypt", specifier = ">=4.0.1" },
-    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.1" },
     { name = "deepdiff", specifier = ">=8.2.0" },
     { name = "feedparser", specifier = ">=6.0.10" },
-    { name = "gitpython", marker = "extra == 'dev'", specifier = ">=3.1.43" },
-    { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.29.5" },
-    { name = "myst-parser", marker = "extra == 'doc'", specifier = ">=4.0.0" },
-    { name = "notebook", marker = "extra == 'dev'", specifier = ">=7.3.2" },
     { name = "paho-mqtt", specifier = ">=1.6.1,<3" },
     { name = "pid", specifier = ">=3.0.4" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.8.0" },
     { name = "pydantic", specifier = ">=2.10.6,<3" },
-    { name = "pygments", marker = "extra == 'doc'", specifier = ">=2.14" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.2" },
-    { name = "pytest", marker = "extra == 'doc'", specifier = ">=8.3.2" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'doc'", specifier = ">=1.0.0" },
     { name = "python-dateutil", specifier = ">=2.8.2" },
     { name = "python-socketio", specifier = ">=5.5" },
     { name = "pytz", specifier = ">=2022.7.1" },
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "requests", specifier = ">=2.28.2" },
-    { name = "rich", marker = "extra == 'dev'", specifier = ">=13.8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.3" },
     { name = "sockjs", specifier = ">=0.11" },
-    { name = "sphinx-autobuild", marker = "extra == 'doc'", specifier = ">=2021.3.14" },
-    { name = "sphinx-copybutton", marker = "extra == 'doc'", specifier = ">=0.5.2" },
-    { name = "sphinx-rtd-theme", marker = "extra == 'doc'", specifier = ">=3.0.2" },
-    { name = "sphinx-tabs", marker = "extra == 'doc'", specifier = ">=3.4.7" },
     { name = "tomli", specifier = ">=2.2.1" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
 ]
-provides-extras = ["dev", "doc"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -255,6 +224,16 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "rich", specifier = ">=13.8.0" },
     { name = "ruff", specifier = ">=0.6.3" },
+]
+doc = [
+    { name = "myst-parser", specifier = ">=4.0.0" },
+    { name = "pygments", specifier = ">=2.14" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-asyncio", specifier = ">=1.0.0" },
+    { name = "sphinx-autobuild", specifier = ">=2021.3.14" },
+    { name = "sphinx-copybutton", specifier = ">=0.5.2" },
+    { name = "sphinx-rtd-theme", specifier = ">=3.0.2" },
+    { name = "sphinx-tabs", specifier = ">=3.4.7" },
 ]
 
 [[package]]
@@ -695,7 +674,7 @@ name = "exceptiongroup"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0b/9f/a65090624ecf468cdca03533906e7c69ed7588582240cfe7cc9e770b50eb/exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88", size = 29749, upload-time = "2025-05-10T17:42:51.123Z" }
 wheels = [
@@ -903,7 +882,7 @@ name = "importlib-metadata"
 version = "8.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp", marker = "python_full_version < '3.11'" },
+    { name = "zipp" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/76/66/650a33bd90f786193e4de4b3ad86ea60b53c89b669a5c7be931fac31cdb0/importlib_metadata-8.7.0.tar.gz", hash = "sha256:d13b81ad223b890aa16c5471f2ac3056cf76c5f10f82d6f9292f0b415f389000", size = 56641, upload-time = "2025-04-27T15:29:01.736Z" }
 wheels = [
