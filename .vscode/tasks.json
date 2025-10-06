@@ -176,6 +176,8 @@
             "command": "uv",
             "args": [
                 "run",
+                "--locked",
+                "--group", "dev",
                 "pre-commit", "install", "-f",
             ],
             "presentation":
@@ -196,6 +198,8 @@
             "command": "uv",
             "args": [
                 "run",
+                "--locked",
+                "--group", "dev",
                 "pre-commit", "run",
                 "--all-files",
                 "--show-diff-on-failure",
