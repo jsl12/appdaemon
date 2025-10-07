@@ -7,8 +7,9 @@
 # >>> import sklearn
 # (No error and it worked!)
 ARG PYTHON_RELEASE=3.12 ALPINE_VERSION=3.21
-# ARG BASE_IMAGE=ghcr.io/astral-sh/uv:alpine${ALPINE_VERSION}
 ARG BASE_IMAGE=python:${PYTHON_RELEASE}-alpine${ALPINE_VERSION}
+# ARG BASE_IMAGE=ghcr.io/astral-sh/uv:alpine${ALPINE_VERSION}
+# ARG BASE_IMAGE=ghcr.io/astral-sh/uv:python${PYTHON_RELEASE}-alpine
 # Image for building dependencies (on architectures that don't provide a ready-made Python wheel)
 FROM ${BASE_IMAGE} AS builder
 
@@ -19,15 +20,18 @@ ARG TARGETARCH
 ARG TARGETVARIANT
 ARG PYTHON_RELEASE
 
-ENV UV_COMPILE_BYTECODE=1
+ENV UV_LOCKED=true
+ENV UV_COMPILE_BYTECODE=true
 ENV UV_LINK_MODE=copy
-ENV UV_INSTALL_DIR=/usr/local/bin
-ENV UV_TOOL_BIN_DIR=/usr/local/bin
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
+ENV UV_SYSTEM_PYTHON=true
 ENV UV_NO_MANAGED_PYTHON=true
 ENV PYTHONPATH="/usr/lib/python${PYTHON_RELEASE}/site-packages"
 
 RUN --mount=type=cache,id=apk-${TARGETARCH}-${TARGETVARIANT},sharing=locked,target=/var/cache/apk/ \
     apk add curl && curl -LsSf https://astral.sh/uv/install.sh | ash
+
+ENV PATH="/root/.local/bin/:$PATH"
 
 # A workaround for compiling the `orsjson` package with rust: see https://github.com/rust-lang/cargo/issues/6513#issuecomment-1440029221
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
@@ -38,14 +42,7 @@ ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 # Install system dependencies, saving the apk cache with docker mount: https://docs.docker.com/build/cache/#keep-layers-small
 # Specify the architecture in the cache id, otherwise the apk cache of different architectures will conflict
 RUN --mount=type=cache,id=apk-${TARGETARCH}-${TARGETVARIANT},sharing=locked,target=/var/cache/apk/ \
-    if [ "$TARGETARCH" = "arm" ]; then\
-        apk add git rust cargo &&\
-        apk add build-base cython;\
-    fi
-
-WORKDIR /usr/src/app
-
-RUN uv venv --system-site-packages
+    if [ "$TARGETARCH" = "arm" ]; then apk add git build-base cython rust cargo; fi
 
 # Install the Python dependencies of AppDaemon
 # Save the pip cache with docker mount: https://docs.docker.com/build/cache/#keep-layers-small
@@ -53,7 +50,7 @@ RUN uv venv --system-site-packages
 RUN --mount=type=cache,id=uv-${TARGETARCH}-${TARGETVARIANT},sharing=locked,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --inexact --no-install-project --no-dev
+    uv sync --inexact --no-install-project --no-dev --no-editable
 
 RUN --mount=type=cache,id=uv-${TARGETARCH}-${TARGETVARIANT},sharing=locked,target=/root/.cache/uv \
     --mount=type=bind,source=./dist,target=/dist \
@@ -63,27 +60,33 @@ ENTRYPOINT [ "/bin/ash" ]
 
 ###################################
 # Runtime image
-FROM ${BASE_IMAGE}
+# FROM ${BASE_IMAGE}
+FROM alpine:${ALPINE_VERSION}
 
 ARG TARGETARCH
 ARG TARGETVARIANT
 ARG PYTHON_RELEASE
 
-ENV UV_COMPILE_BYTECODE=1
-ENV UV_LINK_MODE=copy
-ENV UV_INSTALL_DIR=/usr/local/bin
-ENV UV_TOOL_BIN_DIR=/usr/local/bin
-ENV UV_NO_MANAGED_PYTHON=true
-ENV PYTHONPATH=/usr/lib/python${PYTHON_RELEASE}:/usr/lib/python${PYTHON_RELEASE}/site-packages
+# Install curl to allow for healthchecks
+RUN apk --no-cache add curl
 
-# Copy the python dependencies built and installed in the previous stage
-COPY --from=builder /usr/local/lib/python${PYTHON_RELEASE} /usr/local/lib/python${PYTHON_RELEASE}
-COPY --from=builder /usr/src/app /usr/src/app
-
-WORKDIR /usr/src/app
+WORKDIR /conf
 
 # Copy sample configuration directory and entrypoint script
-COPY ./conf ./conf
+COPY ./conf /opt/conf
+
+# Copy the python dependencies built and installed in the previous stage
+# COPY --from=builder /root/.local/bin/uv /root/.local/bin/uv
+COPY --from=builder /usr/local /usr/local
+
+ENV PATH="/root/.local/bin/:$PATH"
+# ENV UV_LOCKED=true
+ENV UV_COMPILE_BYTECODE=true
+ENV UV_LINK_MODE=copy
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
+ENV UV_SYSTEM_PYTHON=true
+ENV UV_NO_MANAGED_PYTHON=true
+ENV PYTHONPATH="/usr/lib/python${PYTHON_RELEASE}/site-packages"
 
 # API Port
 EXPOSE 5050
@@ -92,8 +95,5 @@ EXPOSE 5050
 VOLUME /conf
 VOLUME /certs
 
-# Install curl to allow for healthchecks
-RUN apk --no-cache add curl
-
-COPY dockerStart.sh dockerStart.sh
-ENTRYPOINT [ "./dockerStart.sh" ]
+COPY ./scripts/start.sh /start.sh
+ENTRYPOINT [ "/start.sh" ]

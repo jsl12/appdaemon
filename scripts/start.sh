@@ -1,13 +1,10 @@
-#!/bin/sh
+#!/usr/bin/env sh
 
 # Default configuration directory used at runtime
 CONF=/conf
 # Directory containing sample config files to copy from
-CONF_SRC=/usr/src/app/conf
+CONF_SRC=/opt/conf
 
-BIN_DIR=/usr/src/app/.venv/bin
-
-source $BIN_DIR/activate
 
 # if configuration file doesn't exist, copy the default
 if [ ! -f $CONF/appdaemon.yaml -a ! -f $CONF/appdaemon.toml ]; then
@@ -96,4 +93,4 @@ find $CONF -name system_packages.txt -type f -not -empty -exec cat {} \; -exec e
 find $CONF -name requirements.txt -type f -not -empty -exec pip3 install --disable-pip-version-check --root-user-action ignore --upgrade -r {} \;
 
 # Lets run it!
-exec appdaemon  -c $CONF "$@"
+exec appdaemon -c $CONF "$@"

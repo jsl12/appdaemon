@@ -16,7 +16,7 @@ jobs:
       UV_COMPILE_BYTECODE: true
       UV_NO_EDITABLE: true
       UV_NO_PROGRESS: true
-      UV_NO_SYNC: true
+      UV_NO_MANAGED_PYTHON: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -32,13 +32,19 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Do something if the cache was restored
         if: steps.setup-uv.outputs.cache-hit == 'true'
-        run: echo "Cache was restored"
-      - name: Install the project
-        run: uv sync --dev
+        run: echo "uv cache was restored"
+      - uses: actions/cache@v4
+        id: pre-commit-cache
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}-${{ hashFiles('uv.lock') }}
+      - name: Do something if the cache was restored
+        if: steps.pre-commit-cache.outputs.cache-hit == 'true'
+        run: echo "pre-commit cache was restored"
       - name: Run pre-commit hooks
         run: >
           uv run
-          --no-sync
+          --verbose
           pre-commit run
           --all-files
           --show-diff-on-failure --color=always
@@ -51,7 +57,6 @@ jobs:
       UV_COMPILE_BYTECODE: true
       UV_NO_EDITABLE: true
       UV_NO_PROGRESS: true
-      UV_NO_SYNC: true
     strategy:
       fail-fast: false
       matrix:
@@ -75,9 +80,6 @@ jobs:
         if: steps.setup-uv.outputs.cache-hit == 'true'
         run: echo "Cache was restored"
 
-      - name: Install the project
-        run: uv sync --dev
-
       - name: Run tests
         # For example, using `pytest`
-        run: uv run --no-sync pytest -m ci
+        run: uv run --verbose pytest -m ci
