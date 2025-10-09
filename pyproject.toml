@@ -5,8 +5,7 @@ readme = "README.md"
 authors = [
     {name = "Andrew I Cockburn", email = "appdaemon@acockburn.com"}
 ]
-# The version is computed dynamically. See `tool.setuptools.dynamic` section below.
-dynamic = ["version"]
+version = "4.5.12"
 license-files = [ "LICENSE.md" ]
 requires-python = ">=3.10,<3.13"
 keywords=[ "appdaemon", "home", "automation" ]
@@ -85,11 +84,6 @@ build-backend = "setuptools.build_meta"
 # https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
 [tool.setuptools.packages.find]
 exclude = ["contrib", "docs", "docs.*", "tests*"]
-
-# Dynamically read version from version.py module
-# https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html#dynamic-metadata
-[tool.setuptools.dynamic]
-version = {attr = "appdaemon.version.__version__"}
 
 # https://docs.pytest.org/en/stable/explanation/goodpractices.html
 [tool.pytest.ini_options]

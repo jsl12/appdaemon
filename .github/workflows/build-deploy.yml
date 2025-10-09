@@ -31,7 +31,6 @@ jobs:
       UV_COMPILE_BYTECODE: true
       UV_NO_EDITABLE: true
       UV_NO_PROGRESS: true
-      UV_NO_SYNC: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
