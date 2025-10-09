@@ -75,15 +75,14 @@ doc = [
 [project.scripts]
 appdaemon = "appdaemon.__main__:main"
 
-# Use setuptools as the build system
+# Use hatch as the build system
 [build-system]
-requires = ["setuptools >= 61.0.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-# Tell setuptools how to find the package source files
-# https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
-[tool.setuptools.packages.find]
-exclude = ["contrib", "docs", "docs.*", "tests*"]
+# Tell hatch how to find the package source files
+[tool.hatch.build.targets.wheel]
+packages = ["appdaemon"]
 
 # https://docs.pytest.org/en/stable/explanation/goodpractices.html
 [tool.pytest.ini_options]
