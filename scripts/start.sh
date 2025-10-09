@@ -89,8 +89,12 @@ fi
 # - Pipe to xargs, printing the executed command (-t), invoking `apk add` with the list of required packages. Do nothing if no system_packages.txt files is present (--no-run-if-empty)
 find $CONF -name system_packages.txt -type f -not -empty -exec cat {} \; -exec echo -n " " \; | tr '\n' ' ' | xargs -t --no-run-if-empty apk add
 
+# Add all site-packages directories to PYTHONPATH to ensure Alpine packages are discoverable
+export PYTHONPATH="${PYTHONPATH}:$(find /usr/lib -name "site-packages" -type d | grep site-packages | sort -V | tr '\n' ':' | sed 's/:$//')"
+
 # Check recursively under $CONF directory for additional python dependencies defined by the end-user via requirements.txt
-find $CONF -name requirements.txt -type f -not -empty -exec pip3 install --disable-pip-version-check --root-user-action ignore --upgrade -r {} \;
+# find $CONF -name requirements.txt -type f -not -empty -exec pip3 install --disable-pip-version-check --root-user-action ignore --upgrade -r {} \;
+find $CONF -name requirements.txt -type f -not -empty -exec uv pip install --upgrade -r {} \;
 
 # Lets run it!
-exec appdaemon -c $CONF "$@"
+exec uv run appdaemon -c $CONF "$@"

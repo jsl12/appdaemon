@@ -6,10 +6,8 @@
 # $> python3
 # >>> import sklearn
 # (No error and it worked!)
-ARG PYTHON_RELEASE=3.12 ALPINE_VERSION=3.21
+ARG PYTHON_RELEASE=3.12 ALPINE_VERSION=3.22
 ARG BASE_IMAGE=python:${PYTHON_RELEASE}-alpine${ALPINE_VERSION}
-# ARG BASE_IMAGE=ghcr.io/astral-sh/uv:alpine${ALPINE_VERSION}
-# ARG BASE_IMAGE=ghcr.io/astral-sh/uv:python${PYTHON_RELEASE}-alpine
 # Image for building dependencies (on architectures that don't provide a ready-made Python wheel)
 FROM ${BASE_IMAGE} AS builder
 
@@ -29,7 +27,7 @@ ENV UV_NO_MANAGED_PYTHON=true
 ENV PYTHONPATH="/usr/lib/python${PYTHON_RELEASE}/site-packages"
 
 RUN --mount=type=cache,id=apk-${TARGETARCH}-${TARGETVARIANT},sharing=locked,target=/var/cache/apk/ \
-    apk add curl && curl -LsSf https://astral.sh/uv/install.sh | ash
+    apk add uv
 
 ENV PATH="/root/.local/bin/:$PATH"
 
@@ -87,3 +85,6 @@ VOLUME /certs
 
 WORKDIR /conf
 ENTRYPOINT [ "/start.sh" ]
+
+RUN --mount=type=cache,id=apk-${TARGETARCH}-${TARGETVARIANT},sharing=locked,target=/var/cache/apk/ \
+    apk add uv
