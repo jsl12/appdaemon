@@ -56,7 +56,8 @@ Additional Subsystems
 Startup
 -------
 
-The top-level entrypoint is ``appdaemon.__main__.main``, which uses :py:mod:`argparse` to parse the launch arguments.
+The top-level entrypoint is :py:func:`appdaemon.__main__.main`, which uses :py:mod:`argparse` to parse the launch
+arguments.
 
 The :py:class:`~appdaemon.__main__.ADMain` class primarily provides a :py:ref:`context manager<context-managers>` that
 can be used with a :py:keyword:`with statement<with>`. This contains an :py:class:`~contextlib.ExitStack` instance that
@@ -67,10 +68,11 @@ to run in the correct order, which is the reverse order that the contexts were e
 Contexts
 ~~~~~~~~
 
-The various context managers that get entered as AppDaemon is started include the logic for following steps. Some of these
-are entered as part of the ``ADMain`` context, and some are entered in the :py:class:`~appdaemon.__main__.ADMain.run`
-method. All of them are exited in reverse order as the :py:class:`~contextlib.ExitStack` is closed, which happens when
-``ADMain`` context is exited.
+The various context managers that get entered as AppDaemon starts include the logic for following steps. Some of these
+are entered as part of the :py:class:`~appdaemon.__main__.ADMain` context, and some are entered in the
+:py:class:`~appdaemon.__main__.ADMain.run` method. All of them are exited in reverse order as the
+:py:class:`~contextlib.ExitStack` is closed, which happens when the :py:class:`~appdaemon.__main__.ADMain` context
+exits.
 
    * Backstop logic to catch any exceptions and log them more prettily.
    * Creates a PID file for the duration of the context, if necessary/applicapable.
@@ -138,7 +140,7 @@ AppDaemon shutdown is globally indicated by the stop :py:class:`~asyncio.Event` 
       import contextlib
 
       async def loop(self):
-          while not self.AD.stopping:
+          while not self.AD.stop_event.is_set():
                ... # Do stuff
                with contextlib.suppress(asyncio.TimeoutError):
                    await asyncio.wait_for(self.AD.stop_event.wait(), timeout=1)

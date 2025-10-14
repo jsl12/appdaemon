@@ -148,10 +148,10 @@ class State:
         main thread. Otherwise, the DbfilenameShelf can get messed up because it's not
         thread-safe. In some systems, it'll complain about being accessed from multiple
         threads."""
-
-        if isinstance(self.state.get(namespace), utils.PersistentDict):
-            self.logger.info(f"Persistent namespace '{namespace}' already initialized")
-            return
+        match self.state.get(namespace):
+            case utils.PersistentDict():
+                self.logger.info(f"Persistent namespace '{namespace}' already initialized")
+                return
 
         ns_db_path = self.namespace_db_path(namespace)
         safe = writeback == "safe"
@@ -480,8 +480,13 @@ class State:
         for remove in removes:
             await self.cancel_state_callback(remove["uuid"], remove["name"])
 
-    def entity_exists(self, namespace: str, entity: str):
-        return namespace in self.state and entity in self.state[namespace]
+    def entity_exists(self, namespace: str, entity: str) -> bool:
+        match self.state.get(namespace):
+            case dict(ns_state):
+                match ns_state.get(entity):
+                    case dict():
+                        return True
+        return False
 
     def get_entity(self, namespace: Optional[str] = None, entity_id: Optional[str] = None, name: Optional[str] = None):
         if namespace is None:
@@ -835,17 +840,19 @@ class State:
             self.state[namespace].update(state)
 
     async def save_namespace(self, namespace: str) -> None:
-        if isinstance((ns := self.state[namespace]), utils.PersistentDict):
-            ns.sync()
-        else:
-            self.logger.warning("Namespace: %s cannot be saved", namespace)
+        match self.state.get(namespace):
+            case utils.PersistentDict() as state:
+                self.logger.debug("Saving namespace: %s", namespace)
+                state.sync()
+            case _:
+                self.logger.warning("Namespace: %s cannot be saved", namespace)
 
     def save_all_namespaces(self) -> None:
         self.logger.debug("Saving all namespaces")
         for ns, state in self.state.items():
             match state:
-                case utils.PersistentDict():
-                    self.logger.info("Saving persistent namespace: %s", ns)
+                case utils.PersistentDict() as state:
+                    self.logger.debug("Saving namespace: %s", ns)
                     state.sync()
 
     def save_hybrid_namespaces(self) -> None:

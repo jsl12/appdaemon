@@ -733,7 +733,7 @@ class ADAPI:
             >>> self.save_namespace()
 
         """
-        namespace = namespace or self.namespace
+        namespace = namespace if namespace is not None else self.namespace
         await self.AD.state.save_namespace(namespace)
 
     #
