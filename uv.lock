@@ -1931,15 +1931,15 @@ wheels = [
 
 [[package]]
 name = "python-socketio"
-version = "5.14.1"
+version = "5.14.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bidict" },
     { name = "python-engineio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/05/c2/a9ae3d0eb4488748a2d9c15defddb7277a852234e29e50c73136834dff1b/python_socketio-5.14.1.tar.gz", hash = "sha256:bf49657073b90ee09e4cbd6651044b46bb526694276621e807a1b8fcc0c1b25b", size = 123068, upload-time = "2025-10-02T18:44:54.467Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ab/80/f31077368adbf65be17245ee69cbccde2891582623e6a8ad647c7a254db3/python_socketio-5.14.2.tar.gz", hash = "sha256:5da35caa04059048a4521b1378340a33a15439c6a748765046112fa0d145fb1b", size = 124111, upload-time = "2025-10-15T18:59:43.838Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d5/5e/302c3499a134a52b68e4e6fb345cea52ab1c41460949bcdb09f8bd0e3594/python_socketio-5.14.1-py3-none-any.whl", hash = "sha256:3419f5917f0e3942317836a77146cb4caa23ad804c8fd1a7e3f44a6657a8406e", size = 78496, upload-time = "2025-10-02T18:44:52.649Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/5b/821733876bad200638237d1cab671b46cfdafb73c0b4094f59c5947155ae/python_socketio-5.14.2-py3-none-any.whl", hash = "sha256:d7133f040ac7ba540f9a907cb4c36d6c4d1d54eb35e482aad9d45c22fca10654", size = 78941, upload-time = "2025-10-15T18:59:42.122Z" },
 ]
 
 [[package]]
