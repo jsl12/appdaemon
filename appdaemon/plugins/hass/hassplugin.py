@@ -6,7 +6,7 @@ import asyncio
 import functools
 import json
 import ssl
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -14,7 +14,7 @@ from time import perf_counter
 from typing import Any, Literal, Optional
 
 import aiohttp
-from aiohttp import ClientResponse, ClientResponseError, RequestInfo, WSMsgType
+from aiohttp import ClientResponse, ClientResponseError, RequestInfo, WSMsgType, WebSocketError
 from pydantic import BaseModel
 
 import appdaemon.utils as utils
@@ -22,8 +22,8 @@ from appdaemon.appdaemon import AppDaemon
 from appdaemon.models.config.plugin import HASSConfig, StartupConditions
 from appdaemon.plugin_management import PluginBase
 
-from .exceptions import HAEventsSubError
-from .utils import ServiceCallStatus, hass_check, looped_coro
+from .exceptions import HAEventsSubError, HassConnectionError
+from .utils import ServiceCallStatus, hass_check
 
 
 class HASSWebsocketResponse(BaseModel):
@@ -81,6 +81,9 @@ class HassPlugin(PluginBase):
     _result_futures: dict[int, asyncio.Future]
     _silent_results: dict[int, bool]
     startup_conditions: list[StartupWaitCondition]
+    maintenance_tasks: list[asyncio.Task]
+    """List of tasks that run in the background as part of the plugin operation. These are tracked because they might
+    need to get cancelled during shutdown."""
 
     start: float
 
@@ -96,6 +99,7 @@ class HassPlugin(PluginBase):
         self._result_futures = {}
         self._silent_results = {}
         self.startup_conditions = []
+        self.maintenance_tasks = []
 
         self.service_logger = self.diag.getChild("services")
         self.logger.info("HASS Plugin initialization complete")
@@ -106,6 +110,12 @@ class HassPlugin(PluginBase):
 
         await self.session.close()
         self.logger.debug("aiohttp session closed for '%s'", self.name)
+
+    def _create_maintenance_task(self, coro: Coroutine, name: str) -> asyncio.Task:
+        task = self.AD.loop.create_task(coro, name=name)
+        self.maintenance_tasks.append(task)
+        task.add_done_callback(lambda t: self.maintenance_tasks.remove(t))
+        return task
 
     def create_session(self) -> aiohttp.ClientSession:
         """Handles creating an :py:class:`~aiohttp.ClientSession` with the cert information from the plugin config
@@ -142,30 +152,36 @@ class HassPlugin(PluginBase):
         self.start = perf_counter()
         async with self.create_session() as self.session:
             try:
-                async with self.session.ws_connect(self.config.websocket_url) as self.ws:
+                async with self.session.ws_connect(
+                    url=self.config.websocket_url,
+                    max_msg_size=self.config.ws_max_msg_size,
+                ) as self.ws:
+                    if (exc := self.ws.exception()) is not None:
+                        raise HassConnectionError("Failed to connect to Home Assistant websocket") from exc
+
                     async for msg in self.ws:
-                        self.updates_recv += 1
-                        self.bytes_recv += len(msg.data)
                         yield msg
             finally:
                 self.connect_event.clear()
 
-    async def match_ws_msg(self, msg: aiohttp.WSMessage) -> dict:
+    async def match_ws_msg(self, msg: aiohttp.WSMessage) -> None:
         """Uses a :py:ref:`match <class-patterns>` statement on :py:class:`~aiohttp.WSMessage`.
 
         Uses :py:meth:`~HassPlugin.process_websocket_json` on :py:attr:`~aiohttp.WSMsgType.TEXT` messages.
         """
         match msg:
-            case aiohttp.WSMessage(type=WSMsgType.TEXT):
+            case aiohttp.WSMessage(type=WSMsgType.TEXT, data=str(data)):
                 # create a separate task for processing messages to keep the message reading task unblocked
-                self.AD.loop.create_task(self.process_websocket_json(msg.json()))
-            case aiohttp.WSMessage(type=WSMsgType.ERROR):
-                self.logger.error("Error from aiohttp websocket: %s", msg.json())
+                self.updates_recv += 1
+                self.bytes_recv += len(data)
+                # Intentionally not using self._create_maintenance_task here
+                self.AD.loop.create_task(self.process_websocket_json(msg.json()), name="process_ws_msg")
+            case aiohttp.WSMessage(type=WSMsgType.ERROR, data=WebSocketError() as err):
+                self.logger.error("Error from aiohttp websocket: %s", err)
             case aiohttp.WSMessage(type=WSMsgType.CLOSE):
                 self.logger.debug("Received %s message", msg.type)
             case _:
                 self.logger.warning("Unhandled websocket message type: %s", msg.type)
-        return msg.json()
 
     @utils.warning_decorator(error_text="Error during processing jSON", reraise=True)
     async def process_websocket_json(self, resp: dict[str, Any]) -> None:
@@ -182,7 +198,7 @@ class HassPlugin(PluginBase):
             case {"type": "auth_ok", "ha_version": ha_version}:
                 self.logger.info("Authenticated to Home Assistant %s", ha_version)
                 # Creating a task here allows the plugin to still receive events as it waits for the startup conditions
-                self.AD.loop.create_task(self.__post_auth__())
+                self._create_maintenance_task(self.__post_auth__(), name="post_auth")
             case {"type": "auth_invalid", "message": message}:
                 self.logger.error("Failed to authenticate to Home Assistant: %s", message)
                 await self.ws.close()
@@ -218,11 +234,14 @@ class HassPlugin(PluginBase):
             case _:
                 raise HAEventsSubError(-1, f"Unknown response from subscribe_events: {res}")
 
-        config_coro = looped_coro(self.get_hass_config, self.config.config_sleep_time.total_seconds())
-        self.AD.loop.create_task(config_coro(self))
-
-        service_coro = looped_coro(self.get_hass_services, self.config.services_sleep_time.total_seconds())
-        self.AD.loop.create_task(service_coro(self))
+        self._create_maintenance_task(
+            self.looped_coro(self.get_hass_config, self.config.config_sleep_time.total_seconds()),
+            name="get_hass_config loop"
+        )
+        self._create_maintenance_task(
+            self.looped_coro(self.get_hass_services, self.config.services_sleep_time.total_seconds()),
+            name="get_hass_services loop"
+        )
 
         if self.first_time:
             conditions = self.config.appdaemon_startup_conditions
@@ -413,7 +432,7 @@ class HassPlugin(PluginBase):
             ad_status = ServiceCallStatus.TERMINATING
             result = {"success": False}
             if not silent:
-                self.logger.warning(f"AppDaemon cancelled waiting for the response from the request: {request}")
+                self.logger.debug(f"AppDaemon cancelled waiting for the response from the request: {request}")
         else:
             ad_status = ServiceCallStatus.OK
 
@@ -527,14 +546,16 @@ class HassPlugin(PluginBase):
                     )
 
         tasks: list[asyncio.Task[Literal[True] | None]] = [
-            self.AD.loop.create_task(cond.event.wait())
+            self._create_maintenance_task(cond.event.wait(), name=f"startup condition: {cond}")
             for cond in self.startup_conditions
         ]  # fmt: skip
 
         if delay := conditions.delay:
             self.logger.info(f"Adding a {delay:.0f}s delay to the {self.name} startup")
-            sleep = self.AD.utility.sleep(delay, timeout_ok=True)
-            task = self.AD.loop.create_task(sleep)
+            task = self._create_maintenance_task(
+                self.AD.utility.sleep(delay, timeout_ok=True),
+                name="startup delay"
+            )
             tasks.append(task)
 
         self.logger.info(f"Waiting for {len(tasks)} startup condition tasks after {self.time_str()}")
@@ -555,7 +576,7 @@ class HassPlugin(PluginBase):
                 async for msg in self.websocket_msg_factory():
                     await self.match_ws_msg(msg)
                     continue
-                raise ValueError
+                raise HassConnectionError("Websocket connection lost")
             except Exception as exc:
                 if not self.AD.stopping:
                     self.error.error(exc)
@@ -568,7 +589,17 @@ class HassPlugin(PluginBase):
 
             # always do this block, no matter what
             finally:
+                for task in self.maintenance_tasks:
+                    if not task.done():
+                        task.cancel()
+
                 if not self.AD.stopping:
+                    for fut in self._result_futures.values():
+                        if not fut.done():
+                            fut.cancel()
+                    self._result_futures.clear()
+                    self._silent_results.clear()
+
                     # remove callback from getting local events
                     await self.AD.callbacks.clear_callbacks(self.name)
 
@@ -604,6 +635,22 @@ class HassPlugin(PluginBase):
     # def utility(self):
     # self.logger.debug("Utility (currently unused)")
     # return None
+
+    async def looped_coro(self, coro: Callable[..., Coroutine], sleep: float):
+        """Run a coroutine in a loop with a sleep interval.
+
+        This is a utility function that can be used to run a coroutine in a loop with a sleep interval. It is used
+        internally to run the `get_hass_config` and
+        """
+        while not self.AD.stopping:
+            try:
+                await coro()
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                self.logger.error("Error in looped coroutine: %s", e)
+            finally:
+                await self.AD.utility.sleep(sleep, timeout_ok=True)
 
     @utils.warning_decorator(error_text="Unexpected error while getting hass config")
     async def get_hass_config(self) -> dict[str, Any] | None:

@@ -85,7 +85,7 @@ class StartupConditions(BaseModel):
     event: EventStartupCondition | None = None
 
 
-class HASSConfig(PluginConfig):
+class HASSConfig(PluginConfig, extra="forbid"):
     ha_url: str = "http://supervisor/core"
     token: SecretStr
     ha_key: Annotated[SecretStr, deprecated("'ha_key' is deprecated. Please use long lived tokens instead")] | None = None
@@ -101,6 +101,7 @@ class HASSConfig(PluginConfig):
     commtype: Annotated[str, deprecated("'commtype' is deprecated")] | None = None
     ws_timeout: ParsedTimedelta = timedelta(seconds=10)
     """Default timeout for waiting for responses from the websocket connection"""
+    ws_max_msg_size: int = 4 * 1024 * 1024
     suppress_log_messages: bool = False
     services_sleep_time: ParsedTimedelta = timedelta(seconds=60)
     """The sleep time in the background task that updates the internal list of available services every once in a while"""
