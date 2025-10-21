@@ -82,7 +82,7 @@ The extra ``doc`` is optional, but needed to work on the documentation.
 .. code-block:: console
   :caption: Create documentation environment
 
-    $ uv sync --extra doc
+    $ uv sync --group doc
 
 Pre-Commit Hooks
 ^^^^^^^^^^^^^^^^
@@ -182,7 +182,7 @@ Assistance with the docs is always welcome, whether its fixing typos and incorre
   :caption: Run sphinx-autobuild
 
     $ uv run \
-      --extra doc \
+      --group doc \
       sphinx-autobuild \
       --show-traceback --fresh-env \
       --host 0.0.0.0 --port 9999 \

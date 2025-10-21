@@ -7,7 +7,7 @@ readonly REPO_DIR=$(cd $(dirname $(dirname $(readlink -f "${BASH_SOURCE[0]}"))) 
 rm -rf ${REPO_DIR}/build ${REPO_DIR}/dist
 
 if command -v uv >/dev/null 2>&1; then
-    uv sync -U --all-extras
+    uv sync --locked --inexact
     echo -n "Building wheel..."
     uv build --wheel --refresh -q
     echo "done."
