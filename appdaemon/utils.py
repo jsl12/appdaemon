@@ -18,6 +18,7 @@ import threading
 import traceback
 from collections.abc import Awaitable, Generator, Iterable, Mapping, Sequence
 from datetime import datetime, time, timedelta, tzinfo
+from enum import Enum
 from functools import wraps
 from logging import Logger
 from pathlib import Path
@@ -112,18 +113,66 @@ class Formatter(object):
         return "(%s)" % (",".join(items) + self.lfchar + self.htchar * indent)
 
 
+class ADWritebackType(str, Enum):
+    """Represents different strategies for AppDaemon to write persistent namespaces to disk.
+
+    See :py:meth:`shelve.open` for more details about writeback modes for the underlying shelf object and
+    `user Defined Namespaces <https://appdaemon.readthedocs.io/en/latest/APPGUIDE.html#user-defined-namespaces>`_
+    """
+    safe = "safe"
+    """The namespace is written to disk every time a change is made so will be up to date even if a crash happens. The
+    downside is that there is a possible performance impact for systems with slower disks, or that set state on many
+    UDNS at a time."""
+    hybrid = "hybrid"
+    """A compromise setting in which the namespaces are saved periodically (once each time around the utility loop,
+    usually once every second- with this setting a maximum of 1 second of data will be lost if AppDaemon crashes."""
+
+
 class PersistentDict(shelve.DbfilenameShelf):
     """
-    Dict-like object that uses a Shelf to persist its contents.
+    Dict-like object that uses a shelf to persist its contents.
+
+    A “shelf” is a persistent, dictionary-like object. The difference with “dbm” databases is that the values (not the
+    keys!) in a shelf can be essentially arbitrary Python objects — anything that the pickle module can handle. This
+    includes most class instances, recursive data types, and objects containing lots of shared sub-objects. The keys are
+    ordinary strings.
     """
 
-    def __init__(self, filename: str | Path, safe: bool, **kwargs):
-        filename = Path(filename).resolve().as_posix()
-        # writeback=True allows for mutating objects in place, like with a dict.
-        super().__init__(filename, writeback=True)
-        self.safe = safe
+    writeback_type: ADWritebackType
+    safe: bool
+    rlock: threading.RLock
+    filepath: Path
+
+    def __init__(self, filename: str | Path, writeback_type: ADWritebackType = ADWritebackType.safe) -> None:
+        match writeback_type:
+            case ADWritebackType.safe:
+                # This is the default condition for shelf objects, which saves all assignments to the dict to disk.
+                writeback = False
+            case ADWritebackType.hybrid:
+                # From the Python docs:
+                # If the optional writeback parameter is set to True, all entries accessed are also cached in memory,
+                # and written back on sync() and close(); this can make it handier to mutate mutable entries in the
+                # persistent dictionary, but, if many entries are accessed, it can consume vast amounts of memory for
+                # the cache, and it can make the close operation very slow since all accessed entries are written back
+                # (there is no way to determine which accessed entries are mutable, nor which ones were actually mutated).
+                writeback = True
+
+        filepath = Path(filename).resolve()
+        if sys.version_info.minor < 13:
+            filepath = filepath.with_suffix("")
+        else:
+            filepath = filepath.with_suffix(".db")
+
+        super().__init__(str(filepath), writeback=writeback)
+        self.writeback_type = writeback_type
+        self.safe = writeback_type == ADWritebackType.safe
         self.rlock = threading.RLock()
-        self.update(new=kwargs)
+        self.filepath = filepath
+        # print(f'PersistentDict using writeback mode: {self.writeback_type}, writeback={writeback}')
+
+    @property
+    def is_safe(self) -> bool:
+        return self.writeback_type == ADWritebackType.safe
 
     def __contains__(self, key):
         with self.rlock:
@@ -165,13 +214,12 @@ class PersistentDict(shelve.DbfilenameShelf):
         with self.rlock:
             super().sync()
 
-    def update(self, new: dict, *args, save=True, **kwargs):
+    def update(self, new: dict[str, Any], save: bool = False) -> None:
         with self.rlock:
-            for key, value in dict(*args, **new, **kwargs).items():
-                # use super().__setitem__() to prevent multiple save() calls
-                super().__setitem__(key, value)
-                if self.safe and save:
-                    self.sync()
+            for key, val in new.items():
+                super().__setitem__(key, val)
+            if self.is_safe or save:
+                self.sync()
 
 
 class AttrDict(dict):

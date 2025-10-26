@@ -17,21 +17,7 @@ logger = logging.getLogger("AppDaemon._test")
 
 
 @pytest_asyncio.fixture(scope="function")
-async def ad(running_loop: asyncio.BaseEventLoop, ad_cfg: AppDaemonConfig, logging_obj: Logging) -> AsyncGenerator[AppDaemon]:
-    """Pytest fixture that provides a full AppDaemon instance for tests.
-
-    General steps:
-      - Create the top-level AppDaemon object.
-      - Set the log levels of the main logs to DEBUG.
-      - Process the import paths.
-      - Set up the dependency manager with the app directory.
-        - Reads all the config files in the app directory.
-      - Disables apps for the duration of the fixture.
-      - Starts/stops the AppDaemon instance.
-    """
-    # logger.info(f"Passed loop: {hex(id(running_loop))}")
-    assert running_loop == asyncio.get_running_loop(), "The running loop should match the one passed in"
-
+async def ad_obj(running_loop: asyncio.BaseEventLoop, ad_cfg: AppDaemonConfig, logging_obj: Logging) -> AsyncGenerator[AppDaemon]:
     ad = AppDaemon(
         logging=logging_obj,
         loop=running_loop,
@@ -45,6 +31,26 @@ async def ad(running_loop: asyncio.BaseEventLoop, ad_cfg: AppDaemonConfig, loggi
         logger_.setLevel("DEBUG")
 
     await ad.app_management._process_import_paths()
+    ad.app_management.dependency_manager = DependencyManager(python_files=list(), config_files=list())
+    yield ad
+
+
+@pytest_asyncio.fixture(scope="function")
+async def ad(ad_obj: AppDaemon, running_loop: asyncio.BaseEventLoop) -> AsyncGenerator[AppDaemon]:
+    """Pytest fixture that provides a full AppDaemon instance for tests.
+
+    General steps:
+      - Create the top-level AppDaemon object.
+      - Set the log levels of the main logs to DEBUG.
+      - Process the import paths.
+      - Set up the dependency manager with the app directory.
+        - Reads all the config files in the app directory.
+      - Disables apps for the duration of the fixture.
+      - Starts/stops the AppDaemon instance.
+    """
+    # logger.info(f"Passed loop: {hex(id(running_loop))}")
+    assert running_loop == asyncio.get_running_loop(), "The running loop should match the one passed in"
+    ad = ad_obj
     config_files = list(recursive_get_files(base=ad.app_dir, suffix=ad.config.ext))
     ad.app_management.dependency_manager = DependencyManager(python_files=list(), config_files=config_files)
 
@@ -85,11 +91,12 @@ def ad_cfg() -> AppDaemonConfig:
             # loglevel="INFO",
             module_debug={
                 "_app_management": "DEBUG",
+                "_state": "DEBUG",
                 # "_events": "DEBUG",
                 # "_scheduler": "DEBUG",
                 "_utility": "DEBUG",
             },
-            namespaces={"test": {}},
+            # namespaces={"test_namespace": {"writeback": "hybrid", "persist": False}},
         )
     )
 

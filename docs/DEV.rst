@@ -12,26 +12,26 @@ Python
 ^^^^^^
 
 `uv <https://docs.astral.sh/uv/>`_
-    An extremely fast Python package and project manager, written in Rust.
+  An extremely fast Python package and project manager, written in Rust.
 `ruff <https://docs.astral.sh/ruff/>`_
-    An extremely fast Python linter and code formatter, written in Rust.
+  An extremely fast Python linter and code formatter, written in Rust.
 `pytest <https://docs.pytest.org/en/stable/>`_
-    The pytest framework makes it easy to write small, readable tests, and can scale to support complex functional testing for applications and libraries.
+  The pytest framework makes it easy to write small, readable tests, and can scale to support complex functional testing for applications and libraries.
 `pre-commit <https://pre-commit.com/>`_
-    A framework for managing and maintaining multi-language pre-commit hooks. Once enabled, these run things like the linter on every commit.
+  A framework for managing and maintaining multi-language pre-commit hooks. Once enabled, these run things like the linter on every commit.
 `sphinx <https://www.sphinx-doc.org/en/master/>`_ for `readthedocs <https://docs.readthedocs.com/platform/stable/intro/sphinx.html>`_
-    Sphinx is a powerful documentation generator that has many features for writing technical documentation. Sphinx is written in Python, and supports documentation written in reStructuredText and Markdown.
+  Sphinx is a powerful documentation generator that has many features for writing technical documentation. Sphinx is written in Python, and supports documentation written in reStructuredText and Markdown.
 
 `VSCode <https://code.visualstudio.com/docs>`_
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 The AppDaemon repo itself contains some configuration specifically for VSCode, which makes some routine tasks easier.
 
 `Python <https://code.visualstudio.com/docs/python/python-quick-start>`_
-    The Python extension makes Visual Studio Code an excellent Python editor, works on any operating system, and is usable with a variety of Python interpreters.
+  The Python extension makes Visual Studio Code an excellent Python editor, works on any operating system, and is usable with a variety of Python interpreters.
 `Python testing <https://code.visualstudio.com/docs/python/testing>`_
-    The Python extension builds on the built-in testing features in VS Code and provides test discovery, test coverage, and running and debugging tests for Python's built-in unittest framework and pytest.
+  The Python extension builds on the built-in testing features in VS Code and provides test discovery, test coverage, and running and debugging tests for Python's built-in unittest framework and pytest.
 `Ruff Extension <https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff>`_
-    A Visual Studio Code extension for Ruff, an extremely fast Python linter and code formatter, written in Rust. Available on the Visual Studio Marketplace.
+  A Visual Studio Code extension for Ruff, an extremely fast Python linter and code formatter, written in Rust. Available on the Visual Studio Marketplace.
 
 Dev Setup
 ---------

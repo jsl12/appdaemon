@@ -4,11 +4,15 @@
 
 **Features**
 
-None
+- Added some basic test for persistent namespaces
 
 **Fixes**
 
-None
+- Fix for sunrise and sunset with offsets - contributed by [ekutner](https://github.com/ekutner)
+- Fix for random MQTT disconnects  - contributed by [Xsandor](https://github.com/Xsandor)
+- Fix for connecting to Home Assistant with https
+- Fix for persistent namespaces in Python 3.12
+- Better error handling for receiving huge websocket messages in the Hass plugin
 
 **Breaking Changes**
 
