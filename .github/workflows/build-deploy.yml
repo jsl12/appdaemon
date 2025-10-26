@@ -47,7 +47,7 @@ jobs:
         with:
           # https://docs.astral.sh/uv/guides/integration/github/#using-uv-in-github-actions
           # It is considered best practice to pin to a specific uv version
-          version: "0.8.23"
+          version: "0.9.5"
           # https://github.com/astral-sh/setup-uv?tab=readme-ov-file#enable-caching
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -104,7 +104,7 @@ jobs:
         with:
           # https://docs.astral.sh/uv/guides/integration/github/#using-uv-in-github-actions
           # It is considered best practice to pin to a specific uv version
-          version: "0.8.23"
+          version: "0.9.5"
           # https://github.com/astral-sh/setup-uv?tab=readme-ov-file#enable-caching
           enable-cache: true
           cache-dependency-glob: uv.lock
