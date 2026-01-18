@@ -14,7 +14,6 @@ from random import randint
 from threading import Thread
 from typing import TYPE_CHECKING, Any, ClassVar
 
-import iso8601
 
 from . import exceptions as ade
 from . import utils
@@ -403,19 +402,20 @@ class Threading:
                 for thread in self.threads:
                     qsize = self.threads[thread]["queue"].qsize()
                     if qsize > 0:
+                        time_called = await self.get_state(
+                            "_threading",
+                            "admin",
+                            f"thread.{thread}",
+                            attribute="time_called",
+                        )
+                        assert isinstance(time_called, str), "time_called is not a string"
+
                         self.logger.warning(
                             "Queue size for thread %s is %s, callback is '%s' called at %s - possible thread starvation",
                             thread,
                             qsize,
-                            await self.get_state("_threading", "admin", "thread.{}".format(thread)),
-                            iso8601.parse_date(
-                                await self.get_state(
-                                    "_threading",
-                                    "admin",
-                                    "thread.{}".format(thread),
-                                    attribute="time_called",
-                                )
-                            ),
+                            await self.get_state("_threading", "admin", f"thread.{thread}"),
+                            await self.AD.sched.parse_datetime(time_called),
                         )
 
                 await self.dump_threads()

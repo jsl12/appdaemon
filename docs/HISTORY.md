@@ -4,7 +4,11 @@
 
 **Features**
 
-None
+- Transitioned project tooling to use [uv](https://docs.astral.sh/uv/)
+    - Dependency management with ``uv.lock`` instead of requirements.txt files.
+    - Dockerfile uses uv to install dependencies and run AppDaemon
+    - CI pipelines using GitHub Actions now use [`astral-sh/setup-uv`](https://github.com/astral-sh/setup-uv)
+    - VSCode tasks use uv to launch things.
 
 **Fixes**
 
