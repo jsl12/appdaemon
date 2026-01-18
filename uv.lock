@@ -188,11 +188,7 @@ dependencies = [
 dev = [
     { name = "build" },
     { name = "gitpython" },
-    { name = "ipykernel" },
-    { name = "notebook" },
     { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
     { name = "rich" },
     { name = "ruff" },
 ]
@@ -206,6 +202,14 @@ doc = [
     { name = "sphinx-copybutton" },
     { name = "sphinx-rtd-theme" },
     { name = "sphinx-tabs" },
+]
+jupyter = [
+    { name = "ipykernel" },
+    { name = "notebook" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
 ]
 
 [package.metadata]
@@ -234,11 +238,7 @@ requires-dist = [
 dev = [
     { name = "build", specifier = ">=1.2.1" },
     { name = "gitpython", specifier = ">=3.1.43" },
-    { name = "ipykernel", specifier = ">=6.29.5" },
-    { name = "notebook", specifier = ">=7.3.2" },
     { name = "pre-commit", specifier = ">=3.8.0" },
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "rich", specifier = ">=13.8.0" },
     { name = "ruff", specifier = ">=0.6.3" },
 ]
@@ -251,6 +251,14 @@ doc = [
     { name = "sphinx-copybutton", specifier = ">=0.5.2" },
     { name = "sphinx-rtd-theme", specifier = ">=3.0.2" },
     { name = "sphinx-tabs", specifier = ">=3.4.7" },
+]
+jupyter = [
+    { name = "ipykernel", specifier = ">=6.29.5" },
+    { name = "notebook", specifier = ">=7.3.2" },
+]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-asyncio", specifier = ">=1.0.0" },
 ]
 
 [[package]]

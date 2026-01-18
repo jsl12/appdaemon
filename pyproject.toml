@@ -51,13 +51,19 @@ changelog = "https://github.com/AppDaemon/appdaemon/blob/master/docs/HISTORY.rst
 dev = [
     "build>=1.2.1",
     "gitpython>=3.1.43",
-    "ipykernel>=6.29.5",
-    "notebook>=7.3.2",
     "pre-commit>=3.8.0",
-    "pytest>=8.3.2",
-    "pytest-asyncio>=1.0.0",
     "rich>=13.8.0",
     "ruff>=0.6.3",
+]
+
+test = [
+    "pytest>=8.3.2",
+    "pytest-asyncio>=1.0.0",
+]
+
+jupyter = [
+    "ipykernel>=6.29.5",
+    "notebook>=7.3.2",
 ]
 
 # Dependencies required to build the documentation using sphinx
