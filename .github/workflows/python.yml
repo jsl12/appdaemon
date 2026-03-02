@@ -102,7 +102,7 @@ jobs:
       - name: Build Python package
         run: uv build --wheel --refresh
       - name: Upload Python package
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: python-package
           path: dist/
