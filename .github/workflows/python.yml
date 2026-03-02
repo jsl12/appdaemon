@@ -140,7 +140,7 @@ jobs:
         if: steps.setup-uv.outputs.cache-hit == 'true'
         run: echo "uv cache was restored"
       - name: Download Python package artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: python-package
           path: dist/
